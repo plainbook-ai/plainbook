@@ -1779,6 +1779,10 @@ createApp({
                 if (r.claude_via_bedrock !== undefined) {
                     claudeViaBedrock.value = r.claude_via_bedrock;
                 }
+                // The server rebuilds the model list from the new keys.
+                if (r.ai_providers !== undefined) {
+                    aiProviderRegistry.value = r.ai_providers;
+                }
             } catch (err) {
                 throw new Error('Error saving API keys', { cause: err });
             }

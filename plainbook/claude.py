@@ -1,4 +1,5 @@
 import os
+import re
 
 import anthropic
 
@@ -75,29 +76,90 @@ def _get_client(api_key=None):
     else:
         return None
 
-def get_claude_models(api_key):
-    """Fetches the latest model IDs for each Claude family (haiku, sonnet, opus)
-    from the Anthropic API. Returns a dict like {"haiku": "claude-haiku-...", ...}.
-    Models are returned most-recent-first by the API, so the first match per
-    family is the latest."""
+def list_claude_models(api_key):
+    """Returns every model the Anthropic API offers, as a list of
+    (model_id, created_at) tuples, following pagination."""
     client = _get_client(api_key)
-    families = {"haiku": None, "sonnet": None, "opus": None}
+    models = []
     after_id = None
     while True:
         kwargs = {"limit": 100}
         if after_id:
             kwargs["after_id"] = after_id
         page = client.models.list(**kwargs)
-        for model in page.data:
-            for family in families:
-                if families[family] is None and family in model.id:
-                    families[family] = model.id
-            if all(families.values()):
-                return families
+        models.extend((m.id, m.created_at) for m in page.data)
         if not page.has_more:
             break
         after_id = page.last_id
-    return families
+    return models
+
+
+# Model ids come in two layouts: "claude-<family>-<version>[-<date>]" (e.g.
+# claude-opus-4-8, claude-haiku-4-5-20251001) and the legacy
+# "claude-<version>-<family>[-<date>]" (e.g. claude-3-5-sonnet-20241022).
+# The version is one or more dash-separated short numbers; the optional date
+# is 8 digits (bounding the version parts keeps the date out of the version).
+_CLAUDE_ID_RE = re.compile(
+    r"^claude-(?:"
+    r"(?P<family1>[a-z]+)-(?P<version1>\d{1,3}(?:-\d{1,3})*)"
+    r"|(?P<version2>\d{1,3}(?:-\d{1,3})*)-(?P<family2>[a-z]+)"
+    r")(?:-\d{8})?$"
+)
+
+# Families listed first, most capable first; families not listed here are
+# appended alphabetically so a new family still shows up.
+_CLAUDE_FAMILY_ORDER = ["fable", "opus", "sonnet", "haiku"]
+
+
+def _parse_claude_id(model_id):
+    """Returns (family, version) for a Claude model id, or None if the id
+    does not follow a known layout."""
+    m = _CLAUDE_ID_RE.match(model_id)
+    if not m:
+        return None
+    family = m.group("family1") or m.group("family2")
+    version = (m.group("version1") or m.group("version2")).replace("-", ".")
+    return family, version
+
+
+def select_claude_providers(models):
+    """Builds the provider entries for the Claude families found in `models`
+    (a list of (model_id, created_at) as returned by list_claude_models).
+    For each family, returns the most recent model and, when there is one,
+    the most recent model of the previous version.  Entries have the shape
+    used by AI_PROVIDER_REGISTRY: {id, name, major, key_setting, model}."""
+    parsed = []
+    for model_id, created_at in models:
+        info = _parse_claude_id(model_id)
+        if info:
+            parsed.append((created_at, model_id, info[0], info[1]))
+    # Newest first; don't rely on the API's ordering.
+    parsed.sort(key=lambda t: t[0], reverse=True)
+
+    by_family = {}
+    for created_at, model_id, family, version in parsed:
+        picks = by_family.setdefault(family, [])
+        if not picks:
+            picks.append((model_id, version))
+        elif len(picks) == 1 and version != picks[0][1]:
+            picks.append((model_id, version))
+
+    def order(family):
+        if family in _CLAUDE_FAMILY_ORDER:
+            return (0, _CLAUDE_FAMILY_ORDER.index(family), family)
+        return (1, 0, family)
+
+    providers = []
+    for family in sorted(by_family, key=order):
+        for i, (model_id, version) in enumerate(by_family[family]):
+            providers.append({
+                "id": f"claude:{family}" + ("-prev" if i else ""),
+                "name": f"Claude {family.capitalize()} {version}",
+                "major": "claude",
+                "key_setting": "claude_api_key",
+                "model": model_id,
+            })
+    return providers
 
 
 def claude_generate_code(

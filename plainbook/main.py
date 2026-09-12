@@ -30,8 +30,8 @@ from bottle import run, default_app, request, response, redirect, TEMPLATE_PATH
 # Plainbook imports
 from .plainbook import (ExecutionError, ClarificationNeeded, check_notebook_file,
                         normalize_notebook_name, unique_notebook_path)
-from .claude import get_claude_models
-from .gemini import get_gemini_models
+from .claude import CLAUDE_MODEL, list_claude_models, select_claude_providers
+from .gemini import list_gemini_models, select_gemini_providers
 
 APP_FOLDER = os.path.dirname(__file__)
 TEMPLATE_PATH.insert(0, os.path.join(APP_FOLDER, 'views'))
@@ -122,89 +122,67 @@ if CLAUDE_VIA_BEDROCK:
     # Use a sentinel so key-presence checks pass for Claude providers
     settings['claude_api_key'] = '__bedrock__'
 
-AI_PROVIDER_REGISTRY = [
-    {"id": "claude:haiku",     "name": "Claude Haiku",      "major": "claude", "key_setting": "claude_api_key", "model": "claude-haiku-4-5-20251001"},
-    {"id": "claude:sonnet",    "name": "Claude Sonnet",     "major": "claude", "key_setting": "claude_api_key", "model": "claude-sonnet-4-5-20250929"},
-    {"id": "claude:opus",      "name": "Claude Opus",       "major": "claude", "key_setting": "claude_api_key", "model": "claude-opus-4-20250514"},
-    {"id": "gemini:2.5-flash", "name": "Gemini 2.5 Flash", "major": "gemini", "key_setting": "gemini_api_key", "model": "gemini-2.5-flash"},
-    {"id": "gemini:2.5-pro",   "name": "Gemini 2.5 Pro",   "major": "gemini", "key_setting": "gemini_api_key", "model": "gemini-2.5-pro"},
-    {"id": "gemini:3-flash",   "name": "Gemini 3 Flash",   "major": "gemini", "key_setting": "gemini_api_key", "model": "gemini-3-flash-preview"},
-    {"id": "gemini:3-pro",     "name": "Gemini 3 Pro",     "major": "gemini", "key_setting": "gemini_api_key", "model": "gemini-3-pro-preview"},
-]
+# The list of AI providers offered in the navbar, in the shape the client
+# expects: {id, name, major, key_setting, model}.  It is built from the
+# providers' model APIs by _build_provider_registry(), at startup and whenever
+# an API key is saved, and mutated in place so references stay valid.
+AI_PROVIDER_REGISTRY = []
 
-# When using Bedrock with ANTHROPIC_MODEL, add a dedicated provider entry for it
-if CLAUDE_VIA_BEDROCK and os.environ.get("ANTHROPIC_MODEL"):
-    _bedrock_model = os.environ["ANTHROPIC_MODEL"]
-    AI_PROVIDER_REGISTRY.insert(0, {
-        "id": "claude:bedrock",
-        "name": f"Claude Bedrock ({_bedrock_model})",
-        "major": "claude",
-        "key_setting": "claude_api_key",
-        "model": _bedrock_model,
-    })
+# Per major: (settings key for the API key, settings key for the cached
+# provider list, fetcher returning the provider entries).
+_PROVIDER_SOURCES = {
+    "claude": ("claude_api_key", "claude_providers",
+               lambda key: select_claude_providers(list_claude_models(key))),
+    "gemini": ("gemini_api_key", "gemini_providers",
+               lambda key: select_gemini_providers(list_gemini_models(key))),
+}
 
-def _update_claude_models():
-    """Fetch latest Claude model IDs from the API and update the registry.
-    On success, saves the model IDs to settings. On failure, falls back
-    to previously saved model IDs."""
+
+def _fetch_providers(major):
+    """Returns the provider entries for `major` from its model API, caching
+    them in settings so they can be used when the API is unreachable.
+    Returns [] when no key is set, or when the fetch fails and nothing is cached."""
+    key_setting, cache_setting, fetch = _PROVIDER_SOURCES[major]
+    api_key = settings.get(key_setting)
+    if not api_key:
+        return []
+    try:
+        providers = fetch(api_key)
+        _save_settings(**{cache_setting: providers})
+        if args.debug:
+            print(f"Updated {major} models: { {p['id']: p['model'] for p in providers} }")
+        return providers
+    except Exception as e:
+        print(f"Warning: could not fetch {major} models: {e}")
+        providers = settings.get(cache_setting) or []
+        if providers:
+            if args.debug:
+                print(f"Using cached {major} models: { {p['id']: p['model'] for p in providers} }")
+        else:
+            print(f"Warning: no cached {major} models; {major} is unavailable until the models can be fetched")
+        return providers
+
+
+def _build_provider_registry():
+    """Rebuilds AI_PROVIDER_REGISTRY in place from the model APIs."""
+    providers = []
     if CLAUDE_VIA_BEDROCK:
-        return  # Bedrock doesn't support models.list; use env-configured model
-    api_key = settings.get('claude_api_key')
-    if not api_key:
-        return
-    latest = None
-    try:
-        latest = get_claude_models(api_key)
-        # Save to settings for offline fallback
-        _save_settings(claude_models=latest)
-        if args.debug:
-            print(f"Updated Claude models: { {k: v for k, v in latest.items() if v} }")
-    except Exception as e:
-        print(f"Warning: could not fetch Claude models: {e}")
-        # Fall back to previously saved models
-        latest = settings.get('claude_models')
-        if latest and args.debug:
-            print(f"Using cached Claude models: { {k: v for k, v in latest.items() if v} }")
-    if latest:
-        for provider in AI_PROVIDER_REGISTRY:
-            if provider['major'] != 'claude':
-                continue
-            family = provider['id'].split(':')[1]  # "haiku", "sonnet", or "opus"
-            if latest.get(family):
-                provider['model'] = latest[family]
+        # Bedrock doesn't support models.list; offer the env-configured model
+        # (ANTHROPIC_MODEL, falling back to the default in claude.py).
+        _bedrock_model = os.environ.get("ANTHROPIC_MODEL", CLAUDE_MODEL)
+        providers.append({
+            "id": "claude:bedrock",
+            "name": f"Claude Bedrock ({_bedrock_model})",
+            "major": "claude",
+            "key_setting": "claude_api_key",
+            "model": _bedrock_model,
+        })
+    else:
+        providers.extend(_fetch_providers("claude"))
+    providers.extend(_fetch_providers("gemini"))
+    AI_PROVIDER_REGISTRY[:] = providers
 
-_update_claude_models()
-
-
-def _update_gemini_models():
-    """Fetch latest Gemini model IDs from the API and update the registry.
-    On success, saves the model IDs to settings. On failure, falls back
-    to previously saved model IDs."""
-    api_key = settings.get('gemini_api_key')
-    if not api_key:
-        return
-    # Derive families from registry (e.g. "gemini:2.5-flash" -> "2.5-flash")
-    families = [p['id'].split(':')[1] for p in AI_PROVIDER_REGISTRY if p['major'] == 'gemini']
-    latest = None
-    try:
-        latest = get_gemini_models(api_key, families)
-        _save_settings(gemini_models=latest)
-        if args.debug:
-            print(f"Updated Gemini models: { {k: v for k, v in latest.items() if v} }")
-    except Exception as e:
-        print(f"Warning: could not fetch Gemini models: {e}")
-        latest = settings.get('gemini_models')
-        if latest and args.debug:
-            print(f"Using cached Gemini models: { {k: v for k, v in latest.items() if v} }")
-    if latest:
-        for provider in AI_PROVIDER_REGISTRY:
-            if provider['major'] != 'gemini':
-                continue
-            family = provider['id'].split(':')[1]
-            if latest.get(family):
-                provider['model'] = latest[family]
-
-_update_gemini_models()
+_build_provider_registry()
 
 
 def _ensure_active_ai_provider():
@@ -213,7 +191,14 @@ def _ensure_active_ai_provider():
     for p in AI_PROVIDER_REGISTRY:
         if p['id'] == current and settings.get(p['key_setting']):
             return current
-    # Current is invalid or missing — pick first provider with a key
+    # Current is invalid or missing — prefer the first provider of the same
+    # major (ids change when the model list is rebuilt), else the first
+    # provider with a key.
+    current_major = current.split(':')[0] if current else None
+    for p in AI_PROVIDER_REGISTRY:
+        if p['major'] == current_major and settings.get(p['key_setting']):
+            settings['active_ai_provider'] = p['id']
+            return p['id']
     for p in AI_PROVIDER_REGISTRY:
         if settings.get(p['key_setting']):
             settings['active_ai_provider'] = p['id']
@@ -460,6 +445,8 @@ def set_key():
             settings['gemini_api_key'] = os.environ['GEMINI_API_KEY']
         if not settings['claude_api_key'] and os.environ.get('CLAUDE_API_KEY'):
             settings['claude_api_key'] = os.environ['CLAUDE_API_KEY']
+    # The available models depend on the keys, so rebuild the provider list.
+    _build_provider_registry()
     active = _ensure_active_ai_provider()
     return dict(
         status='success',
@@ -467,6 +454,7 @@ def set_key():
         has_gemini_key=bool(settings.get('gemini_api_key')),
         has_claude_key=bool(settings.get('claude_api_key')),
         claude_via_bedrock=CLAUDE_VIA_BEDROCK,
+        ai_providers=AI_PROVIDER_REGISTRY,
     )
 
 @post('/set_active_ai')

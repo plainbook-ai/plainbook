@@ -1,3 +1,5 @@
+import re
+
 from google import genai
 from google.genai import types
 
@@ -31,24 +33,95 @@ from .ai_common import (
 )
 
 
-def get_gemini_models(api_key, families):
-    """Fetches latest Gemini model IDs for the given families from the API.
-    families: list of family keys like ["2.5-flash", "2.5-pro", "3-flash", "3-pro"]
-    Returns a dict mapping family key to model ID.
-    Prefers shorter model names (base aliases like "gemini-2.5-flash" over
-    versioned names like "gemini-2.5-flash-001")."""
+def list_gemini_models(api_key):
+    """Returns every model the Gemini API offers, as a list of dicts
+    {id, display_name, supported_actions} (id without the "models/" prefix)."""
     client = genai.Client(api_key=api_key)
-    result = {f: None for f in families}
+    models = []
     for model in client.models.list():
-        model_id = model.name
+        model_id = model.name or ""
         if model_id.startswith("models/"):
             model_id = model_id[len("models/"):]
-        for family in families:
-            prefix = f"gemini-{family}"
-            if model_id.startswith(prefix):
-                if result[family] is None or len(model_id) < len(result[family]):
-                    result[family] = model_id
-    return result
+        models.append({
+            "id": model_id,
+            "display_name": model.display_name or model_id,
+            "supported_actions": list(model.supported_actions or []),
+        })
+    return models
+
+
+# Text-generation model ids look like "gemini-<version>-<tier>[-<variant>]",
+# e.g. gemini-2.5-pro, gemini-3.8-flash, gemini-3.1-pro-preview.  Tiers are
+# tried in this order (so "flash-lite" wins over "flash"), which is also the
+# display order.  Only the GA (no variant) and "preview" variants are offered;
+# specialised variants (-image, -tts, -customtools, ...) are skipped.
+_GEMINI_TIERS = ["pro", "flash-lite", "flash"]
+_GEMINI_TIER_ORDER = ["pro", "flash", "flash-lite"]
+_GEMINI_VARIANTS = {"": 0, "preview": 1}  # lower is preferred
+
+# A general text model supports all of these; image, TTS, audio, live,
+# embedding and similar models lack at least one.
+_GEMINI_REQUIRED_ACTIONS = {"generateContent", "createCachedContent"}
+
+_GEMINI_ID_RE = re.compile(r"^gemini-(?P<version>\d+(?:\.\d+)*)-(?P<rest>.+)$")
+
+
+def _parse_gemini_id(model_id):
+    """Returns (version_tuple, tier, variant) for a Gemini text model id, or
+    None if the id is not of the form gemini-<version>-<tier>[-<variant>]."""
+    m = _GEMINI_ID_RE.match(model_id)
+    if not m:
+        return None
+    version = tuple(int(x) for x in m.group("version").split("."))
+    rest = m.group("rest")
+    for tier in _GEMINI_TIERS:
+        if rest == tier:
+            return version, tier, ""
+        if rest.startswith(tier + "-"):
+            return version, tier, rest[len(tier) + 1:]
+    return None
+
+
+def select_gemini_providers(models):
+    """Builds the provider entries for the Gemini text tiers found in `models`
+    (a list of dicts as returned by list_gemini_models).  For each tier,
+    returns the highest-version model and, when there is one, the model of
+    the previous version; at equal version a GA model beats a preview.
+    Entries have the shape used by AI_PROVIDER_REGISTRY:
+    {id, name, major, key_setting, model}."""
+    candidates = []  # (tier, version, variant_rank, model)
+    for model in models:
+        if not _GEMINI_REQUIRED_ACTIONS <= set(model.get("supported_actions") or []):
+            continue
+        info = _parse_gemini_id(model["id"])
+        if not info:
+            continue
+        version, tier, variant = info
+        if variant not in _GEMINI_VARIANTS:
+            continue
+        candidates.append((tier, version, _GEMINI_VARIANTS[variant], model))
+
+    providers = []
+    for tier in _GEMINI_TIER_ORDER:
+        # Highest version first; within a version, preferred variant first.
+        ranked = sorted(
+            (c for c in candidates if c[0] == tier),
+            key=lambda c: (c[1], -c[2]), reverse=True)
+        picks = []
+        for _, version, _, model in ranked:
+            if not picks:
+                picks.append((version, model))
+            elif len(picks) == 1 and version != picks[0][0]:
+                picks.append((version, model))
+        for i, (_, model) in enumerate(picks):
+            providers.append({
+                "id": f"gemini:{tier}" + ("-prev" if i else ""),
+                "name": model["display_name"],
+                "major": "gemini",
+                "key_setting": "gemini_api_key",
+                "model": model["id"],
+            })
+    return providers
 
 
 GEMINI_GENERATE_MODEL = "gemini-2.5-flash"
