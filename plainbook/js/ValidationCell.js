@@ -1,11 +1,12 @@
 import {ref, watch, nextTick, computed} from './vue.esm-browser.js';
+import { createMarkdown } from './markdown.js';
 
 export default {
     props: ['validation'],
     emits: ['dismiss_validation'],
     
     setup(props, { emit }) {
-        const md = window.markdownit();
+        const md = createMarkdown();
         const message = ref(props.validation.message || '');
         const is_valid = ref(props.validation.is_valid || false);
         const is_hidden = ref(props.validation.is_hidden || false);
@@ -36,7 +37,7 @@ export default {
         :class="is_valid ? 'has-background-success-light' : 'has-background-danger-light'"
         style="position: relative; min-height: 1.75rem;"
     >
-        <div class="validation-content p-2 pr-6 my-0 content is-small" v-html="renderedMarkdown"></div>
+        <div class="validation-content p-2 pr-6 my-0 content is-small" v-html="renderedMarkdown" v-mathjax></div>
         <button @click="dismiss" class="delete"
               style="cursor: pointer; position: absolute; top: 6px; right: 6px;">
         </button>

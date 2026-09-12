@@ -1,7 +1,8 @@
 import { computed, ref } from './vue.esm-browser.js';
 import OutputRenderer from './OutputRenderer.js';
+import { createMarkdown } from './markdown.js';
 
-const md = new markdownit({ html: true });
+const md = createMarkdown({ html: true });
 
 function escapeHtml(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -89,11 +90,11 @@ export default {
                 </span>
             </div>
 
-            <div v-if="cellType === 'markdown'" class="markdown-body content p-3" v-html="renderedMarkdown"></div>
+            <div v-if="cellType === 'markdown'" class="markdown-body content p-3" v-html="renderedMarkdown" v-mathjax></div>
 
             <template v-else>
                 <div v-if="explanation" class="log-cell-explanation markdown-body content px-3 pt-2 pb-1"
-                     v-html="renderedExplanation"></div>
+                     v-html="renderedExplanation" v-mathjax></div>
                 <div v-else class="log-cell-explanation-empty px-3 pt-2 pb-1 is-size-7 has-text-grey-light is-italic">
                     (no explanation)
                 </div>
@@ -125,7 +126,7 @@ export default {
                             <div class="log-unit-subcell mb-2">
                                 <p class="is-size-7 has-text-grey mb-1"><em>Setup</em></p>
                                 <div v-if="t.setup.renderedExplanation" class="markdown-body content is-size-7 mb-1"
-                                     v-html="t.setup.renderedExplanation"></div>
+                                     v-html="t.setup.renderedExplanation" v-mathjax></div>
                                 <pre v-if="t.setup.highlightedCode" class="language-python m-0"><code class="language-python" v-html="t.setup.highlightedCode + '\\n'"></code></pre>
                                 <p v-if="!t.setup.renderedExplanation && !t.setup.highlightedCode"
                                    class="is-size-7 has-text-grey-light is-italic">(empty)</p>
@@ -133,7 +134,7 @@ export default {
                             <div class="log-unit-subcell">
                                 <p class="is-size-7 has-text-grey mb-1"><em>Test</em></p>
                                 <div v-if="t.test.renderedExplanation" class="markdown-body content is-size-7 mb-1"
-                                     v-html="t.test.renderedExplanation"></div>
+                                     v-html="t.test.renderedExplanation" v-mathjax></div>
                                 <pre v-if="t.test.highlightedCode" class="language-python m-0"><code class="language-python" v-html="t.test.highlightedCode + '\\n'"></code></pre>
                                 <p v-if="!t.test.renderedExplanation && !t.test.highlightedCode"
                                    class="is-size-7 has-text-grey-light is-italic">(empty)</p>

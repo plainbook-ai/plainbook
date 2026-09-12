@@ -41,7 +41,7 @@ where = ["."]
 include = ["plainbook*"]
 
 [tool.setuptools.package-data]
-plainbook = ["js/*", "css/**/*", "views/*", "images/*"]
+plainbook = ["js/**/*", "css/**/*", "views/*", "images/*"]
 
 [tool.setuptools.exclude-package-data]
 plainbook = ["css/node_modules/**/*", "css/package-lock.json", "css/package.json"]

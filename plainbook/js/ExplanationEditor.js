@@ -1,4 +1,5 @@
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from './vue.esm-browser.js';
+import { createMarkdown } from './markdown.js';
 
 const ExplanationRenderer = {
     props: ['source', 'isActive', 'codeValid', 'outputValid', 'executed', 'hasError',
@@ -23,7 +24,7 @@ const ExplanationRenderer = {
         watch(isEditing, (v) => emit('update:editing', v));
         const localSource = ref((Array.isArray(props.source) ? props.source.join('') : props.source) || '');
         const originalSource = ref(localSource.value);
-        const md = new markdownit({ html: true });
+        const md = createMarkdown({ html: true });
         const textareaEl = ref(null);
         const localIsLocked = ref(props.isLocked);
 
@@ -239,7 +240,7 @@ const ExplanationRenderer = {
         <div class="explanation-container pt-3 pl-4 pr-4 pb-1">
             <div v-if="!isEditing"
                  class="explanation-body content"
-                 v-html="rendered" @dblclick="enterEditMode">
+                 v-html="rendered" v-mathjax @dblclick="enterEditMode">
             </div>
         </div>
 

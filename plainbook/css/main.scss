@@ -73,6 +73,13 @@ pre[class*="language-"] {
   --bulma-block-spacing: 0;
 }
 
+// MathJax output (see js/markdown.js).  Long display equations scroll
+// sideways instead of widening the cell.
+mjx-container[display="true"] {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 [v-cloak] {
   display: none;
 }

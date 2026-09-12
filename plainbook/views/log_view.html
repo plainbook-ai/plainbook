@@ -12,6 +12,23 @@
     <script src="js/prism.min.js"></script>
     <script src="js/prism-python.min.js"></script>
     <script src="js/markdown-it.min.js"></script>
+    <script>
+      // MathJax is served locally (see js/mathjax/README.md).  Only the \( \) and
+      // \[ \] delimiters are recognised: js/markdown.js decides what is math in
+      // the Markdown and emits those, so a stray "$" in prose is never typeset.
+      // Vue renders incrementally, so typesetting is done per element by the
+      // v-mathjax directive rather than for the whole page at startup.  The
+      // context menu is off because its accessibility explorer loads from a CDN.
+      window.MathJax = {
+        tex: { inlineMath: [['\\(', '\\)']], displayMath: [['\\[', '\\]']] },
+        options: {
+          enableMenu: false,
+          skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'],
+        },
+        startup: { typeset: false },
+      };
+    </script>
+    <script src="js/mathjax/tex-svg-full.js" async></script>
     <style>
       html, body { height: 100%; margin: 0; overflow: hidden; }
       #log-view-app { display: flex; flex-direction: column; height: 100vh; }

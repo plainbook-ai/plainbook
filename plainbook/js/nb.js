@@ -1,4 +1,5 @@
 import { createApp, ref, computed, onMounted, onBeforeUnmount, nextTick, getCurrentInstance } from './vue.esm-browser.js';
+import { mathjaxDirective } from './markdown.js';
 
 import AppNavbar from './AppNavbar.js';
 import NotebookCell from './NotebookCell.js';
@@ -17,7 +18,7 @@ import SideIndex from './SideIndex.js';
 import { outputsHaveStoppingError, getErrorInfo } from './errorUtils.js';
 import { serverFetch, isServerDown, SERVER_DOWN_MESSAGE } from './serverFetch.js';
 
-createApp({
+const app = createApp({
     components: { AppNavbar, NotebookCell, CellInsertionZone, CellLabel, SettingsModal, InfoModal, TestHelpModal, UiError, PanelBar, NotebookHelp, UnitTestView, NotebookTitle, NotebookFileModal, SideIndex },
     setup() {
         // Extract token from URL
@@ -2017,4 +2018,6 @@ createApp({
     },
 
 template: `#app-template`,
-}).mount('#app');
+});
+app.directive('mathjax', mathjaxDirective);
+app.mount('#app');
