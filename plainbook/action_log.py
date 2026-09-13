@@ -63,7 +63,7 @@ def _make_initial_snapshot(nb):
 
 
 OP_LOG_CONFIG = {
-    "set_key": {"redact_params": ["gemini_api_key", "claude_api_key"], "snapshot": False},
+    "set_key": {"redact_params": ["gemini_api_key", "claude_api_key", "openai_api_key"], "snapshot": False},
     "set_active_ai": {"snapshot": False},
     "edit_explanation": {"snapshot": True},
     "propose_amend": {"snapshot": False, "truncate_param_fields": {"text": 4096},

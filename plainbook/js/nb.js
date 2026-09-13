@@ -95,6 +95,7 @@ const app = createApp({
         const isCodespace = ref(false);
         const hasGeminiKey = ref(false);
         const hasClaudeKey = ref(false);
+        const hasOpenaiKey = ref(false);
         const claudeViaBedrock = ref(false);
         const logEnabled = ref(false);
         const logviewEnabled = ref(false);
@@ -107,6 +108,7 @@ const app = createApp({
             const apiKeys = {
                 'gemini_api_key': hasGeminiKey.value,
                 'claude_api_key': hasClaudeKey.value,
+                'openai_api_key': hasOpenaiKey.value,
             };
             return aiProviderRegistry.value.filter(p => !!apiKeys[p.key_setting]);
         });
@@ -246,6 +248,7 @@ const app = createApp({
                 isCodespace.value = r.is_codespace || false;
                 hasGeminiKey.value = r.has_gemini_key || false;
                 hasClaudeKey.value = r.has_claude_key || false;
+                hasOpenaiKey.value = r.has_openai_key || false;
                 claudeViaBedrock.value = r.claude_via_bedrock || false;
                 if (r.explanation_detail !== undefined) explanationDetail.value = r.explanation_detail;
                 explanationBullets.value = !!r.explanation_bullets;
@@ -1765,6 +1768,7 @@ const app = createApp({
                 const r = await apiCall('/set_key', 'POST', {
                     gemini_api_key: keys.gemini_api_key,
                     claude_api_key: keys.claude_api_key,
+                    openai_api_key: keys.openai_api_key,
                 });
                 console.log('API keys saved successfully');
                 if (r.active_ai_provider !== undefined) {
@@ -1776,6 +1780,9 @@ const app = createApp({
                 }
                 if (r.has_claude_key !== undefined) {
                     hasClaudeKey.value = r.has_claude_key;
+                }
+                if (r.has_openai_key !== undefined) {
+                    hasOpenaiKey.value = r.has_openai_key;
                 }
                 if (r.claude_via_bedrock !== undefined) {
                     claudeViaBedrock.value = r.claude_via_bedrock;
@@ -2007,7 +2014,7 @@ const app = createApp({
             tocOpen,
             genError, uiError, closeUiError, renameNotebook, debug, sendDebugRequest, resetTokens,
             explanationEditKey, deleteCell, moveCell,
-            clearOutputs, activeAiProvider, availableAiProviders, setActiveAiProvider, isCodespace, hasGeminiKey, hasClaudeKey, claudeViaBedrock, logEnabled, logviewEnabled, printAllEnabled, chromeless, authToken,
+            clearOutputs, activeAiProvider, availableAiProviders, setActiveAiProvider, isCodespace, hasGeminiKey, hasClaudeKey, hasOpenaiKey, claudeViaBedrock, logEnabled, logviewEnabled, printAllEnabled, chromeless, authToken,
             restarting, ui_restart,
             ui_runTestCell, ui_runAllTests, ui_saveExplanationAndRunTest, ui_saveCodeAndRunTest, ui_forceRegenerateTestCode,
             unitTestTargetIndex, unitTestActiveSubcell, unitTestActiveTestName, enterUnitTestMode, exitUnitTestMode,

@@ -22,10 +22,12 @@ from .ai_common import (get_session_tokens, DEFAULT_EXPLANATION_DETAIL_LEVEL,
 from .utilities import PIP_INSTALL_CODE, parse_pip_install_result, resolve_package_name
 from .gemini import gemini_generate_code, gemini_validate_code, gemini_explain_code, gemini_generate_cell_name, gemini_generate_test_code, gemini_generate_unit_test_code, gemini_verify_notebook, gemini_verify_tests, gemini_fold_additions, gemini_amend_explanation
 from .claude import claude_generate_code, claude_validate_code, claude_explain_code, claude_generate_cell_name, claude_generate_test_code, claude_generate_unit_test_code, claude_verify_notebook, claude_verify_tests, claude_fold_additions, claude_amend_explanation
+from .openai import openai_generate_code, openai_validate_code, openai_explain_code, openai_generate_cell_name, openai_generate_test_code, openai_generate_unit_test_code, openai_verify_notebook, openai_verify_tests, openai_fold_additions, openai_amend_explanation
 
 AI_PROVIDERS = {
     "gemini": {"generate": gemini_generate_code, "validate": gemini_validate_code, "explain": gemini_explain_code, "name": gemini_generate_cell_name, "generate_test": gemini_generate_test_code, "generate_unit_test": gemini_generate_unit_test_code, "verify_notebook": gemini_verify_notebook, "verify_tests": gemini_verify_tests, "fold": gemini_fold_additions, "amend_explanation": gemini_amend_explanation},
     "claude": {"generate": claude_generate_code, "validate": claude_validate_code, "explain": claude_explain_code, "name": claude_generate_cell_name, "generate_test": claude_generate_test_code, "generate_unit_test": claude_generate_unit_test_code, "verify_notebook": claude_verify_notebook, "verify_tests": claude_verify_tests, "fold": claude_fold_additions, "amend_explanation": claude_amend_explanation},
+    "openai": {"generate": openai_generate_code, "validate": openai_validate_code, "explain": openai_explain_code, "name": openai_generate_cell_name, "generate_test": openai_generate_test_code, "generate_unit_test": openai_generate_unit_test_code, "verify_notebook": openai_verify_notebook, "verify_tests": openai_verify_tests, "fold": openai_fold_additions, "amend_explanation": openai_amend_explanation},
 }
 
 MAX_OUTPUT_CHARS_FOR_AI = 2000

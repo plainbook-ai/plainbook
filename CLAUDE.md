@@ -27,6 +27,7 @@ The main files are as follows:
 * ai_common.py : common code for AI interfaces.
 * gemini.py : interface to Gemini LLM for code generation and verification.
 * claude.py : interface to Claude LLM for code generation and verification.
+* openai.py : interface to OpenAI LLM for code generation and verification.
 
 ### Client Code
 

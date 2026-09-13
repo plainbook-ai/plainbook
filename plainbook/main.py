@@ -32,6 +32,7 @@ from .plainbook import (ExecutionError, ClarificationNeeded, check_notebook_file
                         normalize_notebook_name, unique_notebook_path)
 from .claude import CLAUDE_MODEL, list_claude_models, select_claude_providers
 from .gemini import list_gemini_models, select_gemini_providers
+from .openai import list_openai_models, select_openai_providers
 
 APP_FOLDER = os.path.dirname(__file__)
 TEMPLATE_PATH.insert(0, os.path.join(APP_FOLDER, 'views'))
@@ -111,10 +112,27 @@ def _save_settings(**values):
         store.update(values)
     _write_settings()
 
-# Fill in missing API keys from environment variables (e.g. Codespaces secrets)
-for env_var, setting_key in [('CLAUDE_API_KEY', 'claude_api_key'), ('GEMINI_API_KEY', 'gemini_api_key')]:
-    if not settings.get(setting_key) and os.environ.get(env_var):
-        settings[setting_key] = os.environ[env_var]
+# The API-key settings, with the environment variable that can supply each
+# (e.g. Codespaces secrets).  Every provider key is listed here.
+API_KEY_SETTINGS = [
+    ('claude_api_key', 'CLAUDE_API_KEY'),
+    ('gemini_api_key', 'GEMINI_API_KEY'),
+    ('openai_api_key', 'OPENAI_API_KEY'),
+]
+
+def _apply_env_api_keys():
+    """Fills in API keys missing from settings from the environment (in memory
+    only, so env-provided keys are never written to the settings file)."""
+    for setting_key, env_var in API_KEY_SETTINGS:
+        if not settings.get(setting_key) and os.environ.get(env_var):
+            settings[setting_key] = os.environ[env_var]
+
+def _api_key_flags():
+    """{'has_claude_key': bool, ...} for the client."""
+    return {'has_' + k.replace('_api_key', '_key'): bool(settings.get(k))
+            for k, _ in API_KEY_SETTINGS}
+
+_apply_env_api_keys()
 
 # Bedrock support: when enabled, Claude is available without an API key
 CLAUDE_VIA_BEDROCK = os.environ.get("CLAUDE_CODE_USE_BEDROCK") == "1"
@@ -135,6 +153,8 @@ _PROVIDER_SOURCES = {
                lambda key: select_claude_providers(list_claude_models(key))),
     "gemini": ("gemini_api_key", "gemini_providers",
                lambda key: select_gemini_providers(list_gemini_models(key))),
+    "openai": ("openai_api_key", "openai_providers",
+               lambda key: select_openai_providers(list_openai_models(key))),
 }
 
 
@@ -180,6 +200,7 @@ def _build_provider_registry():
     else:
         providers.extend(_fetch_providers("claude"))
     providers.extend(_fetch_providers("gemini"))
+    providers.extend(_fetch_providers("openai"))
     AI_PROVIDER_REGISTRY[:] = providers
 
 _build_provider_registry()
@@ -387,8 +408,7 @@ def get_notebook():
     _in_codespace = bool(os.environ.get('CODESPACES'))
     return dict(
         nb=notebook.get_json(),
-        has_gemini_key=bool(settings.get('gemini_api_key')),
-        has_claude_key=bool(settings.get('claude_api_key')),
+        **_api_key_flags(),
         claude_via_bedrock=CLAUDE_VIA_BEDROCK,
         debug=args.debug,
         active_ai_provider=settings.get('active_ai_provider'),
@@ -412,47 +432,37 @@ def get_notebook():
 @require_token
 def set_key():
     data = request.json
-    gemini_api_key = data.get('gemini_api_key', '')
-    claude_api_key = data.get('claude_api_key', '')
-    # Protocol: null = explicitly remove, '' = unchanged, non-empty = set new key.
-    if gemini_api_key is None:
-        gemini_api_key = ''
-    elif gemini_api_key == '':
-        gemini_api_key = _saved_settings.get('gemini_api_key', '')
-    if CLAUDE_VIA_BEDROCK:
-        # Bedrock manages Claude access; ignore any client-side key changes
-        claude_api_key = '__bedrock__'
-    elif claude_api_key is None:
-        claude_api_key = ''
-    elif claude_api_key == '':
-        claude_api_key = _saved_settings.get('claude_api_key', '')
-    # Save only user-provided keys to the file (never env-var keys)
-    _saved_settings['gemini_api_key'] = gemini_api_key
-    if not CLAUDE_VIA_BEDROCK:
-        _saved_settings['claude_api_key'] = claude_api_key
-    settings['gemini_api_key'] = gemini_api_key
-    settings['claude_api_key'] = claude_api_key
-    # Not _save_settings(): the two stores deliberately disagree here (under
-    # Bedrock the sentinel goes to `settings` only), so the assignments above
-    # stand and only the write is shared.
+    # Protocol per key: null = explicitly remove, '' = unchanged, non-empty = set new key.
+    for setting_key, _ in API_KEY_SETTINGS:
+        value = data.get(setting_key, '')
+        if setting_key == 'claude_api_key' and CLAUDE_VIA_BEDROCK:
+            # Bedrock manages Claude access; ignore any client-side key changes.
+            # The sentinel goes to `settings` only, never to the file.
+            settings[setting_key] = '__bedrock__'
+            continue
+        if value is None:
+            value = ''
+        elif value == '':
+            value = _saved_settings.get(setting_key, '')
+        # Save only user-provided keys to the file (never env-var keys)
+        _saved_settings[setting_key] = value
+        settings[setting_key] = value
+    # Not _save_settings(): the two stores deliberately disagree under Bedrock,
+    # so the assignments above stand and only the write is shared.
     try:
         _write_settings()
     except Exception as e:
         return dict(status='error', message=str(e))
     # After saving, apply env-var fallbacks to in-memory settings only
     if os.environ.get('CODESPACES'):
-        if not settings['gemini_api_key'] and os.environ.get('GEMINI_API_KEY'):
-            settings['gemini_api_key'] = os.environ['GEMINI_API_KEY']
-        if not settings['claude_api_key'] and os.environ.get('CLAUDE_API_KEY'):
-            settings['claude_api_key'] = os.environ['CLAUDE_API_KEY']
+        _apply_env_api_keys()
     # The available models depend on the keys, so rebuild the provider list.
     _build_provider_registry()
     active = _ensure_active_ai_provider()
     return dict(
         status='success',
         active_ai_provider=active,
-        has_gemini_key=bool(settings.get('gemini_api_key')),
-        has_claude_key=bool(settings.get('claude_api_key')),
+        **_api_key_flags(),
         claude_via_bedrock=CLAUDE_VIA_BEDROCK,
         ai_providers=AI_PROVIDER_REGISTRY,
     )

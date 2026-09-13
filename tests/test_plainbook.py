@@ -1347,9 +1347,10 @@ class TestExplainCode:
         _pbmod.AI_PROVIDERS["explstub"]["explain"] = fake_explain
         return calls
 
-    def test_both_providers_expose_explain(self):
+    def test_all_providers_expose_explain(self):
         assert "explain" in _pbmod.AI_PROVIDERS["gemini"]
         assert "explain" in _pbmod.AI_PROVIDERS["claude"]
+        assert "explain" in _pbmod.AI_PROVIDERS["openai"]
 
     def test_explain_stores_ai_explanation(self, notebook):
         calls = self._stub()

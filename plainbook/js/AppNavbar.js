@@ -1,3 +1,6 @@
+// Display names of the provider majors used as group headers in the model menu.
+const MAJOR_LABELS = { claude: 'Claude', gemini: 'Gemini', openai: 'OpenAI' };
+
 export default {
     props: ['isLocked', 'running', 'restarting', 'runningActivity', 'hasNotebook', 'upToDate', 'cellCount', 'testCellCount', 'hasApiKey', 'debug',
             'activeAiProvider', 'availableAiProviders', 'shareOutputWithAi', 'aiTokens', 'verification', 'verificationStatus', 'logEnabled', 'logviewEnabled', 'chromeless', 'authToken'],
@@ -59,7 +62,7 @@ export default {
             for (const p of this.availableAiProviders) {
                 const major = p.major || p.id;
                 if (major !== lastMajor) {
-                    groups.push({ type: 'header', label: major.charAt(0).toUpperCase() + major.slice(1) });
+                    groups.push({ type: 'header', label: MAJOR_LABELS[major] || major.charAt(0).toUpperCase() + major.slice(1) });
                     lastMajor = major;
                 }
                 groups.push({ type: 'item', provider: p });

@@ -33,11 +33,13 @@ class TestFilterParams:
 
     def test_redacts_api_keys(self):
         params = {"gemini_api_key": "real-secret", "claude_api_key": "also-secret",
-                  "provider": "gemini:2.5-flash"}
+                  "openai_api_key": "third-secret", "provider": "gemini:2.5-flash"}
         out = action_log._filter_params("set_key", params)
         assert out["gemini_api_key"].startswith("<redacted len=")
         assert "real-secret" not in out["gemini_api_key"]
         assert out["claude_api_key"].startswith("<redacted len=")
+        assert out["openai_api_key"].startswith("<redacted len=")
+        assert "third-secret" not in out["openai_api_key"]
         assert out["provider"] == "gemini:2.5-flash"
 
     def test_passthrough_when_no_config(self):

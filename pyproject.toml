@@ -24,6 +24,7 @@ dependencies = [
     "py-machineid",
     "snapshot-kernel>=0.2.0",
     "nbformat",
+    "openai",
     "pyyaml",
     "requests",
 ]

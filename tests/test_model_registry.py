@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from plainbook.claude import select_claude_providers
 from plainbook.gemini import select_gemini_providers
+from plainbook.openai import select_openai_providers
 
 
 ENTRY_KEYS = {"id", "name", "major", "key_setting", "model"}
@@ -203,3 +204,90 @@ class TestGemini:
     def test_empty_listing(self):
         assert select_gemini_providers([]) == []
         assert select_claude_providers([]) == []
+
+
+def _ts(s):
+    return int(_d(s).timestamp())
+
+
+# (id, created) subset of the OpenAI listing in September 2026.
+OPENAI_MODELS = [
+    ("gpt-6-astra", _ts("2026-08-27")),
+    ("gpt-5.6-sol", _ts("2026-06-23")),
+    ("gpt-5.6-terra", _ts("2026-06-23")),
+    ("gpt-5.5-pro", _ts("2026-04-22")),
+    ("gpt-5.5-2026-04-23", _ts("2026-04-21")),
+    ("gpt-5.5", _ts("2026-04-21")),
+    ("gpt-5.4-mini", _ts("2026-03-13")),
+    ("gpt-5.4-nano", _ts("2026-03-13")),
+    ("gpt-5.4", _ts("2026-03-04")),
+    ("gpt-5.3-chat-latest", _ts("2026-02-27")),
+    ("gpt-5.3-codex", _ts("2026-02-08")),
+    ("gpt-5.2", _ts("2025-12-09")),
+    ("gpt-5-search-api", _ts("2025-10-03")),
+    ("gpt-5-nano", _ts("2025-08-05")),
+    ("gpt-5-mini", _ts("2025-08-05")),
+    ("gpt-5", _ts("2025-08-05")),
+    ("gpt-5-2025-08-07", _ts("2025-08-01")),
+    ("gpt-4.1", _ts("2025-04-10")),
+    ("gpt-4.1-nano", _ts("2025-04-10")),
+    ("o3", _ts("2025-04-09")),
+    ("gpt-4o-mini-tts", _ts("2025-03-19")),
+    ("gpt-4o", _ts("2024-05-10")),
+    ("gpt-image-2", _ts("2026-04-16")),
+    ("text-embedding-3-large", _ts("2024-01-22")),
+]
+
+
+class TestOpenai:
+    def test_latest_and_previous_per_tier(self):
+        by_id = _by_id(select_openai_providers(OPENAI_MODELS))
+        assert by_id["openai:gpt"]["model"] == "gpt-5.5"
+        assert by_id["openai:gpt-prev"]["model"] == "gpt-5.4"
+        assert by_id["openai:gpt-mini"]["model"] == "gpt-5.4-mini"
+        assert by_id["openai:gpt-mini-prev"]["model"] == "gpt-5-mini"
+        assert by_id["openai:gpt-nano"]["model"] == "gpt-5.4-nano"
+        assert by_id["openai:gpt-nano-prev"]["model"] == "gpt-5-nano"
+        # Codenames are tiers of their own, with no previous version yet.
+        assert by_id["openai:gpt-astra"]["model"] == "gpt-6-astra"
+        assert by_id["openai:gpt-sol"]["model"] == "gpt-5.6-sol"
+        assert by_id["openai:gpt-terra"]["model"] == "gpt-5.6-terra"
+        assert "openai:gpt-astra-prev" not in by_id
+        assert len(by_id) == 9
+
+    def test_names_and_shape(self):
+        by_id = _by_id(select_openai_providers(OPENAI_MODELS))
+        assert by_id["openai:gpt"]["name"] == "GPT-5.5"
+        assert by_id["openai:gpt-mini-prev"]["name"] == "GPT-5 Mini"
+        assert by_id["openai:gpt-astra"]["name"] == "GPT-6 Astra"
+        for p in by_id.values():
+            assert set(p) == ENTRY_KEYS
+            assert p["major"] == "openai"
+            assert p["key_setting"] == "openai_api_key"
+
+    def test_order(self):
+        ids = [p["id"] for p in select_openai_providers(OPENAI_MODELS)]
+        # Known tiers first, then codenames newest first.
+        assert ids == [
+            "openai:gpt", "openai:gpt-prev",
+            "openai:gpt-mini", "openai:gpt-mini-prev",
+            "openai:gpt-nano", "openai:gpt-nano-prev",
+            "openai:gpt-astra", "openai:gpt-sol", "openai:gpt-terra",
+        ]
+
+    def test_specialised_and_non_gpt_never_selected(self):
+        selected = {p["model"] for p in select_openai_providers(OPENAI_MODELS)}
+        for bad in ["gpt-5.5-pro", "gpt-5.5-2026-04-23", "gpt-5.3-chat-latest", "gpt-5.3-codex",
+                    "gpt-5-search-api", "gpt-5-2025-08-07", "o3", "gpt-4o-mini-tts", "gpt-4o",
+                    "gpt-image-2", "text-embedding-3-large"]:
+            assert bad not in selected
+
+    def test_version_ordering(self):
+        # 5 < 5.4 < 5.10, and numeric (not string) comparison.
+        models = [("gpt-5", 1), ("gpt-5.10", 2), ("gpt-5.4", 3)]
+        by_id = _by_id(select_openai_providers(models))
+        assert by_id["openai:gpt"]["model"] == "gpt-5.10"
+        assert by_id["openai:gpt-prev"]["model"] == "gpt-5.4"
+
+    def test_empty_listing(self):
+        assert select_openai_providers([]) == []

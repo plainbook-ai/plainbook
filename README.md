@@ -52,12 +52,12 @@ plainbook notebook.plnb
 
 You can use any file name you like, with any extension you like. 
 
-**AI API Keys.** You need a Gemini or Claude API key to use Plainbook. Click on the Settings button (the gear on the top right) to see instructions on how to set them. Both providers offer free trial credits, and usage costs are typically low for regular notebook work.
+**AI API Keys.** You need a Gemini, Claude, or OpenAI API key to use Plainbook. Click on the Settings button (the gear on the top right) to see instructions on how to set them. Usage costs are typically low for regular notebook work.
 
 ### Key Features
 
 - **Natural language notebooks:** Describe what you want in plain English; AI generates and validates the code. 
-- **Multiple AI providers:** Use Gemini, Claude, or both—cross-check implementations for robustness.
+- **Multiple AI providers:** Use Gemini, Claude, or OpenAI models—cross-check implementations for robustness.
 - **Built-in testing:** Write test cells to verify notebook behavior automatically.
 - **Shareable & reproducible:** Share notebooks with others who can modify, regenerate, and rerun your work.
 
@@ -81,7 +81,7 @@ Differently from standard Jupyter notebooks, Plainbooks cells are guaranteed to 
 
 **AI Providers**
 Plainbook is designed to work with multiple AI providers, and users can choose which provider to use for code generation and checking.  The system is designed to allow users to easily switch between providers, so that users can cross-check that the implementation obtained from one provider is considered valid by another provider.  This avoids over-reliance on a single class of AI models. 
-Currently, Plainbook supports Gemini and Claude models.  You will need an API key for at least one such provider to use Plainbook.
+Currently, Plainbook supports Gemini, Claude, and OpenAI models.  You will need an API key for at least one such provider to use Plainbook.
 
 
 ## Papers

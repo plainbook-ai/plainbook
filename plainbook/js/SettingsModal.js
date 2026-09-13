@@ -1,35 +1,46 @@
-import { ref, watch } from './vue.esm-browser.js';
+import { ref, reactive, watch } from './vue.esm-browser.js';
+
+// The providers whose API keys are managed here.  `id` is the prefix of the
+// `<id>_api_key` setting and of the `has<Id>Key` prop.
+const KEY_PROVIDERS = [
+    { id: 'claude', label: 'Claude', url: 'https://console.anthropic.com/settings/keys' },
+    { id: 'gemini', label: 'Gemini', url: 'https://aistudio.google.com/app/apikey' },
+    { id: 'openai', label: 'OpenAI', url: 'https://platform.openai.com/api-keys' },
+];
 
 export default {
-    props: ['isActive', 'isCodespace', 'hasGeminiKey', 'hasClaudeKey', 'claudeViaBedrock',
+    props: ['isActive', 'isCodespace', 'hasGeminiKey', 'hasClaudeKey', 'hasOpenaiKey', 'claudeViaBedrock',
             'askQuestions', 'explanationDetail', 'explanationBullets', 'explanationLatex',
             'fixErrorAmendsDescription', 'skipRegeneration'],
     emits: ['close', 'save'],
     setup(props, { emit }) {
-        const localGeminiKey = ref('');
-        const localClaudeKey = ref('');
+        // Per-provider key state, keyed by provider id.
+        const localKeys = reactive({});   // text typed into the key input
+        const editing = reactive({});     // the user clicked the masked key to replace it
+        const removed = reactive({});     // the user asked to remove the key
         const localAskQuestions = ref(false);
         const localSkipRegeneration = ref(true);
         const localExplanationDetail = ref(1);
         const localExplanationBullets = ref(false);
         const localExplanationLatex = ref(false);
         const localFixErrorAmendsDescription = ref(true);
-        // Track whether the user has clicked to edit each field
-        const geminiEditing = ref(false);
-        const claudeEditing = ref(false);
-        // Track whether the user wants to remove a key
-        const geminiRemoved = ref(false);
-        const claudeRemoved = ref(false);
+
+        // Whether the server has a key for the provider (props hasClaudeKey, ...).
+        const hasKey = (id) => !!props['has' + id.charAt(0).toUpperCase() + id.slice(1) + 'Key'];
+
+        const resetKeyState = () => {
+            for (const p of KEY_PROVIDERS) {
+                localKeys[p.id] = '';
+                editing[p.id] = false;
+                removed[p.id] = false;
+            }
+        };
+        resetKeyState();
 
         // Reset inputs whenever the modal is opened
         watch(() => props.isActive, (active) => {
             if (active) {
-                localGeminiKey.value = '';
-                localClaudeKey.value = '';
-                geminiEditing.value = false;
-                claudeEditing.value = false;
-                geminiRemoved.value = false;
-                claudeRemoved.value = false;
+                resetKeyState();
                 localAskQuestions.value = !!props.askQuestions;
                 // Default to on when the setting is not yet defined.
                 localSkipRegeneration.value = props.skipRegeneration !== false;
@@ -41,36 +52,27 @@ export default {
             }
         });
 
-        const startEditing = (provider) => {
-            if (provider === 'gemini') {
-                geminiEditing.value = true;
-            } else {
-                claudeEditing.value = true;
-            }
-        };
-
-        const removeKey = (provider) => {
-            if (provider === 'gemini') {
-                geminiRemoved.value = true;
-            } else {
-                claudeRemoved.value = true;
-            }
-        };
+        const startEditing = (id) => { editing[id] = true; };
+        const removeKey = (id) => { removed[id] = true; };
 
         const handleSave = () => {
-            emit('save', {
-                gemini_api_key: geminiRemoved.value ? null : ((geminiEditing.value || !props.hasGeminiKey) ? localGeminiKey.value : ''),
-                claude_api_key: claudeRemoved.value ? null : ((claudeEditing.value || !props.hasClaudeKey) ? localClaudeKey.value : ''),
+            const payload = {
                 ask_questions: localAskQuestions.value,
                 skip_regeneration: localSkipRegeneration.value,
                 fix_error_amends_description: localFixErrorAmendsDescription.value,
                 explanation_detail: localExplanationDetail.value,
                 explanation_bullets: localExplanationBullets.value,
                 explanation_latex: localExplanationLatex.value,
-            });
+            };
+            // Per key: null = remove, '' = keep the current one, text = new key.
+            for (const p of KEY_PROVIDERS) {
+                payload[p.id + '_api_key'] = removed[p.id] ? null
+                    : ((editing[p.id] || !hasKey(p.id)) ? (localKeys[p.id] || '') : '');
+            }
+            emit('save', payload);
         };
 
-        return { localGeminiKey, localClaudeKey, geminiEditing, claudeEditing, geminiRemoved, claudeRemoved,
+        return { keyProviders: KEY_PROVIDERS, localKeys, editing, removed, hasKey,
             localAskQuestions, localExplanationDetail, localExplanationBullets, localExplanationLatex,
             localFixErrorAmendsDescription, localSkipRegeneration, startEditing, removeKey, handleSave };
     },
@@ -83,62 +85,35 @@ export default {
                 <button class="delete" aria-label="close" @click="$emit('close')"></button>
             </header>
             <section class="modal-card-body">
-                <div class="field">
-                    <label class="label">Claude API Key</label>
-                    <div class="control" v-if="claudeViaBedrock">
+                <div class="field" v-for="p in keyProviders" :key="p.id">
+                    <label class="label">{{ p.label }} API Key</label>
+                    <div class="control" v-if="p.id === 'claude' && claudeViaBedrock">
                         <div class="input settings-bedrock-status">
                             Claude is available via AWS Bedrock
                         </div>
                     </div>
-                    <div class="control" v-else-if="claudeRemoved">
+                    <div class="control" v-else-if="removed[p.id]">
                         <div class="input settings-key-status">
                             Key will be removed on save
                         </div>
                     </div>
-                    <div class="control" v-else-if="hasClaudeKey && !claudeEditing">
+                    <div class="control" v-else-if="hasKey(p.id) && !editing[p.id]">
                         <div style="display: flex; align-items: center; gap: 0.5rem;">
                             <div class="input settings-key-masked"
-                                 @click="startEditing('claude')">
+                                 @click="startEditing(p.id)">
                                 ●●●●●●●●●●●●
                             </div>
-                            <button class="button is-small is-danger is-outlined" @click="removeKey('claude')"><i class="bx bx-trash"></i></button>
+                            <button class="button is-small is-danger is-outlined" @click="removeKey(p.id)"><i class="bx bx-trash"></i></button>
                         </div>
                     </div>
                     <div class="control" v-else>
                         <input class="input" type="text"
-                               v-model="localClaudeKey"
-                               :placeholder="hasClaudeKey ? 'Enter new key (leave blank to keep current)' : 'Enter your Claude API key (optional)'">
+                               v-model="localKeys[p.id]"
+                               :placeholder="hasKey(p.id) ? 'Enter new key (leave blank to keep current)' : 'Enter your ' + p.label + ' API key (optional)'">
                     </div>
-                    <p class="help" v-if="!claudeViaBedrock">
-                        <a href="https://console.anthropic.com/settings/keys" target="_blank" class="button is-small is-link is-light" style="margin-top: 0.5rem;">
-                            {{ hasClaudeKey ? 'Manage Claude API Key' : 'Get Claude API Key' }}
-                        </a>
-                    </p>
-                </div>
-                <div class="field">
-                    <label class="label">Gemini API Key</label>
-                    <div class="control" v-if="geminiRemoved">
-                        <div class="input settings-key-status">
-                            Key will be removed on save
-                        </div>
-                    </div>
-                    <div class="control" v-else-if="hasGeminiKey && !geminiEditing">
-                        <div style="display: flex; align-items: center; gap: 0.5rem;">
-                            <div class="input settings-key-masked"
-                                 @click="startEditing('gemini')">
-                                ●●●●●●●●●●●●
-                            </div>
-                            <button class="button is-small is-danger is-outlined" @click="removeKey('gemini')"><i class="bx bx-trash"></i></button>
-                        </div>
-                    </div>
-                    <div class="control" v-else>
-                        <input class="input" type="text"
-                               v-model="localGeminiKey"
-                               :placeholder="hasGeminiKey ? 'Enter new key (leave blank to keep current)' : 'Enter your Gemini API key (optional)'">
-                    </div>
-                    <p class="help">
-                        <a href="https://aistudio.google.com/app/apikey" target="_blank" class="button is-small is-link is-light" style="margin-top: 0.5rem;">
-                            {{ hasGeminiKey ? 'Manage Gemini API Key' : 'Get Gemini API Key' }}
+                    <p class="help" v-if="!(p.id === 'claude' && claudeViaBedrock)">
+                        <a :href="p.url" target="_blank" class="button is-small is-link is-light" style="margin-top: 0.5rem;">
+                            {{ hasKey(p.id) ? 'Manage ' + p.label + ' API Key' : 'Get ' + p.label + ' API Key' }}
                         </a>
                     </p>
                 </div>
