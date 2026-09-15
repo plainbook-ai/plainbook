@@ -1,25 +1,21 @@
 # <img src="https://github.com/plainbook-ai/plainbook/raw/main/plainbook/images/Plainbook_logo.png" height="30"> Plainbook: Natural Language Notebooks
 
-A Plainbook is a computational notebook, written in natural language rather than code. 
+A Plainbook is a computational notebook, similar to [Jupyter notebooks](https://jupyter.org/), but written in natural language rather than code: 
+
+- **Natural language:** Describe what you want in plain English; AI generates and validates the code. 
+- **Multiple AI providers:** Use Gemini, Claude, or OpenAI model, or free open-weights local models, to generate and validate code. 
+- **Built-in testing:** You can test cells with data, to check that the code correctly implements the natural language.
+- **Shareable & reproducible:** Anyone who can understand natural language can make sense of your notebooks, and adapt them to their own data and needs.
 
 Normally you would generate a notebook with AI and then keep the code, discarding the natural language that produced it. 
 Plainbook keeps the language instead: the code is generated and executed automatically, and can be validated and tested through natural language and data inspection — no coding knowledge required.
 This lets you share your data analysis and science with a much wider audience, including people who don't know how to code.
 
-Plainbooks resemble [Jupyter notebooks](https://jupyter.org/), in that they combine instructions and results in a single shareable document. 
-They differ in these ways:
-
-* **Linear semantics.** Cells execute strictly in order — the same order in which a human reads the natural-language description of the computation.
-* **Dependency tracking.** Code analysis determines what a change actually affects, so only a minimal portion of the Plainbook is regenerated or re-executed.
-* **Test cells.** Plainbook lets you test that individual cells implement their natural language descriptions via natural-language tests and data inspection. 
-
-Linear semantics and dependency tracking are inspired by [Marimo](https://marimo.io/). 
-The ability to test cells hinges on natural language and on the special [snapshot-kernel](https://plainbook-ai/snapshot-kernel/) underlying Plainbook. 
-
 The goal of the project is to replicate in natural language what made Jupyter so successful: sharing code and results together, so that any recipient can validate and modify what they receive. 
 Recipients can check that the generated code implements the natural-language tasks, and can edit the Plainbook, regenerate the code, and rerun it — just as in Jupyter or Marimo.
 
 You can read more about the design phylosophy of Plainbook, and its code testing approach, in the paper  [Plainbook: Data Science, in Plain Language](https://arxiv.org/abs/2607.05717). 
+
 
 ### Try Plainbook Now
 
@@ -52,22 +48,16 @@ plainbook notebook.plnb
 
 You can use any file name you like, with any extension you like. 
 
-**AI API Keys.** You need a Gemini, Claude, or OpenAI API key to use Plainbook, unless you set up a local model (below). Click on the Settings button (the gear on the top right) to see instructions on how to set them. Usage costs are typically low for regular notebook work.
+## AI Models
 
-**Running without an API key (local model).** Plainbook can also run an open-weights model on your own computer, for free. In Settings, under *Local model*, click *Download & set up*: Plainbook downloads the [Ollama](https://ollama.com) runtime into `~/.config/plainbook/ollama/` (no administrator rights needed; about 160 MB on macOS, 1.4 GB on Linux and Windows, or it uses an Ollama you already have) and then the model, `gpt-oss:20b` (about 14 GB, kept in Ollama's usual `~/.ollama/models`). The model needs a computer with at least 16 GB of memory. Once set up, choose *Local: GPT-OSS 20B* from the AI model dropdown in the navbar. The model is loaded when you select it and unloaded as soon as you switch to a cloud model or close Plainbook. Local models are slower and less capable than the cloud ones, but they are a way to try Plainbook, and to work privately, at no cost. *Remove* in Settings deletes the model from your disk.
+Plainbook needs access to an AI model to generate and validate code from natural language.  You can use: 
 
-### Key Features
+* **Local open-weights model** (gpt-oss:20b via Ollama).  Go to Settings, under Local Models, click *Download & set up*.  
+This works (tested) on a MacBook Air M3 with 24GB of memory, and may work well on other computers with at least 16GB of memory.  Code generation is slower than with cloud models, but this is free and private. 
+* **Gemini, Claude, or OpenAI** cloud models.  These are faster and more capable than the local model, but require an API key and incur usage costs. To use these models click on Settings, and add an API key for the model of choice.  If you do not have an API key already, follow the links for the model vendors to obtain one.  You can add multiple API keys.
 
-- **Natural language notebooks:** Describe what you want in plain English; AI generates and validates the code. 
-- **Multiple AI providers:** Use Gemini, Claude, or OpenAI models—cross-check implementations for robustness.
-- **Built-in testing:** Write test cells to verify notebook behavior automatically.
-- **Shareable & reproducible:** Share notebooks with others who can modify, regenerate, and rerun your work.
+You can add multiple models, and easily switch between them for code generation and validation.
 
-### Resources
-
-* [GitHub Repository](https://github.com/plainbook-ai/plainbook).
-* [Pypi package](https://pypi.org/project/plainbook/).
-* [Development mailing list](https://groups.google.com/g/plainbook).
 
 ## Plainbook Structure
 
@@ -79,11 +69,16 @@ Plainbooks consist of three types of cells:
 
 * **Test cells**, where the user can write properties that should hold at certain points of the notebook to check that everything is working as expected.
 
-Differently from standard Jupyter notebooks, Plainbooks cells are guaranteed to be executed in order, from first to last, matching the order in which humans read the cells. Plainbooks relies on a [checkpointing kernel](https://github.com/plainbook-ai/snapshot-kernel) to remember the execution state after each cell, so that it can re-run a cell without having to start from the beginning.
+You can also create **unit tests** for Plainbook cells. These tests generate simple data and feed it to the notebook cells you want to test, enabling you to check that the code generated from natural language is correct.  
 
-**AI Providers**
-Plainbook is designed to work with multiple AI providers, and users can choose which provider to use for code generation and checking.  The system is designed to allow users to easily switch between providers, so that users can cross-check that the implementation obtained from one provider is considered valid by another provider.  This avoids over-reliance on a single class of AI models. 
-Currently, Plainbook supports Gemini, Claude, and OpenAI models, and a local open-weights model (gpt-oss:20b via Ollama).  You will need an API key for at least one cloud provider, or a local model set up in Settings, to use Plainbook.
+### Linear Execution
+
+Differently from standard Jupyter notebooks, Plainbooks cells are guaranteed to be executed in order, from first to last, matching the order in which humans read the cells. Plainbooks relies on a [checkpointing kernel](https://github.com/plainbook-ai/snapshot-kernel) to remember the execution state after each cell, so that it can re-run a cell without having to start from the beginning.  In this, Plainbook is similar to [Marimo](https://marimo.io). 
+
+
+### Local Model Details
+
+To use a local model, Plainbook downloads the [Ollama](https://ollama.com) runtime into `~/.config/plainbook/ollama/` (no administrator rights needed; about 160 MB on macOS, 1.4 GB on Linux and Windows, or it uses an Ollama you already have) and then the model, `gpt-oss:20b` (about 14 GB, kept in Ollama's usual `~/.ollama/models`). The model needs a computer with at least 16 GB of memory. Once set up, choose *Local: GPT-OSS 20B* from the AI model dropdown in the navbar. The model is loaded when you select it and unloaded as soon as you switch to a cloud model or close Plainbook. Local models are slower and less capable than the cloud ones, but they are a way to try Plainbook, and to work privately, at no cost. *Remove* in Settings deletes the model from your disk.
 
 
 ## Papers
@@ -124,6 +119,11 @@ To cite the design and the testing approach, cite the paper:
   doi     = {10.48550/arXiv.2607.05717}
 }
 ```
+## Resources
+
+* [GitHub Repository](https://github.com/plainbook-ai/plainbook).
+* [Pypi package](https://pypi.org/project/plainbook/).
+* [Development mailing list](https://groups.google.com/g/plainbook).
 
 ## Contributors
 

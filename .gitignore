@@ -18,6 +18,11 @@ raceplan.md
 .claude/
 notes/
 .vscode/
+test_notebooks/
+TODO.md
+Plans/
+remove_names
+remove_output
 
 # Session transcript logs: may contain credentials
 *.jsonl
