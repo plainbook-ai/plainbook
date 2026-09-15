@@ -1351,6 +1351,12 @@ class TestExplainCode:
         assert "explain" in _pbmod.AI_PROVIDERS["gemini"]
         assert "explain" in _pbmod.AI_PROVIDERS["claude"]
         assert "explain" in _pbmod.AI_PROVIDERS["openai"]
+        assert "explain" in _pbmod.AI_PROVIDERS["local"]
+
+    def test_all_providers_expose_the_same_operations(self):
+        expected = set(_pbmod.AI_PROVIDERS["claude"])
+        for major, fns in _pbmod.AI_PROVIDERS.items():
+            assert set(fns) == expected, major
 
     def test_explain_stores_ai_explanation(self, notebook):
         calls = self._stub()

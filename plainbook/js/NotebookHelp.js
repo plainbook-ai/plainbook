@@ -41,7 +41,8 @@ const NotebookHelp = {
                 If you are working with sensitive data, you may not want to share the cell outputs with AI. 
                 Sharing the outputs with AI helps generate better code, and is the default setting for a notebook.</li>
                 <li class="mb-2"><button class="button is-small is-light"><i class="bx bx-light-bulb"></i></button> 
-                This dropdown allows you to switch between different AI models.</li>
+                This dropdown allows you to switch between different AI models, including a
+                model running on your own computer once you set one up in Settings (no API key needed).</li>
                 </ul>
                 
 

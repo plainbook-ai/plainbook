@@ -1,5 +1,7 @@
 // Display names of the provider majors used as group headers in the model menu.
 const MAJOR_LABELS = { claude: 'Claude', gemini: 'Gemini', openai: 'OpenAI' };
+// Majors with a single entry that is its own label: no group header for them.
+const UNGROUPED_MAJORS = new Set(['local']);
 
 export default {
     props: ['isLocked', 'running', 'restarting', 'runningActivity', 'hasNotebook', 'upToDate', 'cellCount', 'testCellCount', 'hasApiKey', 'debug',
@@ -62,7 +64,11 @@ export default {
             for (const p of this.availableAiProviders) {
                 const major = p.major || p.id;
                 if (major !== lastMajor) {
-                    groups.push({ type: 'header', label: MAJOR_LABELS[major] || major.charAt(0).toUpperCase() + major.slice(1) });
+                    if (UNGROUPED_MAJORS.has(major)) {
+                        if (groups.length) groups.push({ type: 'divider' });
+                    } else {
+                        groups.push({ type: 'header', label: MAJOR_LABELS[major] || major.charAt(0).toUpperCase() + major.slice(1) });
+                    }
                     lastMajor = major;
                 }
                 groups.push({ type: 'item', provider: p });
@@ -288,10 +294,10 @@ export default {
                                         </span>
                                     </button>
                                 </div>
-                                <div class="dropdown-menu" role="menu" v-if="canSwitchProvider">
+                                <div class="dropdown-menu ai-provider-menu" role="menu" v-if="canSwitchProvider">
                                     <div class="dropdown-content">
                                         <template v-for="(entry, idx) in groupedProviders" :key="idx">
-                                            <hr v-if="entry.type === 'header' && idx > 0" class="dropdown-divider">
+                                            <hr v-if="entry.type === 'divider' || (entry.type === 'header' && idx > 0)" class="dropdown-divider">
                                             <p v-if="entry.type === 'header'" class="dropdown-item has-text-weight-bold ai-provider-header">
                                                 {{ entry.label }}
                                             </p>

@@ -110,8 +110,15 @@ const app = createApp({
                 'claude_api_key': hasClaudeKey.value,
                 'openai_api_key': hasOpenaiKey.value,
             };
-            return aiProviderRegistry.value.filter(p => !!apiKeys[p.key_setting]);
+            // A provider without key_setting (the local model) needs no key.
+            return aiProviderRegistry.value.filter(p => !p.key_setting || !!apiKeys[p.key_setting]);
         });
+
+        // The Settings modal's local model panel changed the provider list.
+        const onProvidersChanged = ({ ai_providers, active_ai_provider }) => {
+            aiProviderRegistry.value = ai_providers || [];
+            activeAiProvider.value = active_ai_provider;
+        };
 
         // For info modal
         const showInfo = ref(false);
@@ -2014,7 +2021,7 @@ const app = createApp({
             tocOpen,
             genError, uiError, closeUiError, renameNotebook, debug, sendDebugRequest, resetTokens,
             explanationEditKey, deleteCell, moveCell,
-            clearOutputs, activeAiProvider, availableAiProviders, setActiveAiProvider, isCodespace, hasGeminiKey, hasClaudeKey, hasOpenaiKey, claudeViaBedrock, logEnabled, logviewEnabled, printAllEnabled, chromeless, authToken,
+            clearOutputs, activeAiProvider, availableAiProviders, setActiveAiProvider, onProvidersChanged, isCodespace, hasGeminiKey, hasClaudeKey, hasOpenaiKey, claudeViaBedrock, logEnabled, logviewEnabled, printAllEnabled, chromeless, authToken,
             restarting, ui_restart,
             ui_runTestCell, ui_runAllTests, ui_saveExplanationAndRunTest, ui_saveCodeAndRunTest, ui_forceRegenerateTestCode,
             unitTestTargetIndex, unitTestActiveSubcell, unitTestActiveTestName, enterUnitTestMode, exitUnitTestMode,

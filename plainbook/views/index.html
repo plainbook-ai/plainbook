@@ -256,6 +256,8 @@
         :explanation-bullets="explanationBullets"
         :explanation-latex="explanationLatex"
         :fix-error-amends-description="fixErrorAmendsDescription"
+        :auth-token="authToken"
+        @providers-changed="onProvidersChanged"
         @close="showSettings = false"
         @save="(keys) => {showSettings = false; saveSettings(keys); }"
     />

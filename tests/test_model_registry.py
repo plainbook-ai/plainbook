@@ -291,3 +291,17 @@ class TestOpenai:
 
     def test_empty_listing(self):
         assert select_openai_providers([]) == []
+
+
+class TestLocal:
+    """The single "Local" registry entry is built by main._local_provider_entries,
+    which cannot be imported without main's side effects; this pins the shape
+    it must produce.  The entry carries no model: the model in use is the one
+    chosen in Settings, resolved at call time so that every open notebook
+    (each its own process) uses the same one."""
+
+    def test_local_entry_is_keyless_and_modelless(self):
+        p = {"id": "local", "name": "Local", "major": "local", "key_setting": None, "model": None}
+        assert set(p) == ENTRY_KEYS
+        assert p["id"].split(":")[0] == p["major"]
+        assert p["key_setting"] is None and p["model"] is None

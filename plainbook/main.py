@@ -1,6 +1,7 @@
 # General imports
 import argparse
 import asyncio
+import atexit
 import datetime
 from functools import wraps
 import json
@@ -33,6 +34,8 @@ from .plainbook import (ExecutionError, ClarificationNeeded, check_notebook_file
 from .claude import CLAUDE_MODEL, list_claude_models, select_claude_providers
 from .gemini import list_gemini_models, select_gemini_providers
 from .openai import list_openai_models, select_openai_providers
+from . import local_models
+from .local_models import LocalModelError
 
 APP_FOLDER = os.path.dirname(__file__)
 TEMPLATE_PATH.insert(0, os.path.join(APP_FOLDER, 'views'))
@@ -183,9 +186,50 @@ def _fetch_providers(major):
         return providers
 
 
+def _provider_available(p):
+    """Whether the registry entry `p` can be used now: it needs no key
+    (key_setting is None, e.g. a local model) or its key is set."""
+    return p['key_setting'] is None or bool(settings.get(p['key_setting']))
+
+
+LOCAL_PROVIDER_ID = "local"
+
+
+def _current_local_model():
+    """The backend name of the local model chosen in Settings, or None.
+
+    Re-read from the settings file rather than from memory: every notebook
+    window is its own process, and they must all use the same local model
+    (two different ones cannot run at once), so a change made in one window's
+    Settings has to reach the others."""
+    try:
+        with open(SETTINGS_FILE, 'r') as f:
+            model_id = (yaml.safe_load(f) or {}).get('local_model')
+    except FileNotFoundError:
+        model_id = settings.get('local_model')
+    entry = local_models.catalog_entry(model_id)
+    return entry["backend_name"] if entry else None
+
+
+def _local_provider_entries():
+    """The single "Local" registry entry, present once a local model has been
+    chosen in Settings.  Which model it is gets resolved when used (see
+    _current_local_model), so the entry carries no model; and it needs no
+    API key, hence key_setting None."""
+    if _current_local_model() is None:
+        return []
+    return [{
+        "id": LOCAL_PROVIDER_ID,
+        "name": "Local",
+        "major": "local",
+        "key_setting": None,
+        "model": None,
+    }]
+
+
 def _build_provider_registry():
     """Rebuilds AI_PROVIDER_REGISTRY in place from the model APIs."""
-    providers = []
+    providers = list(_local_provider_entries())     # first in the dropdown
     if CLAUDE_VIA_BEDROCK:
         # Bedrock doesn't support models.list; offer the env-configured model
         # (ANTHROPIC_MODEL, falling back to the default in claude.py).
@@ -203,6 +247,15 @@ def _build_provider_registry():
     providers.extend(_fetch_providers("openai"))
     AI_PROVIDER_REGISTRY[:] = providers
 
+
+def _refresh_local_providers():
+    """Replaces just the local entries of the registry (a change of local
+    model must not re-query the cloud model APIs), then re-validates the
+    active provider, starting or stopping the local model as needed."""
+    AI_PROVIDER_REGISTRY[:] = (_local_provider_entries()
+                               + [p for p in AI_PROVIDER_REGISTRY if p['major'] != 'local'])
+    _apply_active_provider(_ensure_active_ai_provider())
+
 _build_provider_registry()
 
 
@@ -210,24 +263,47 @@ def _ensure_active_ai_provider():
     """Validate active_ai_provider setting; auto-select first available if invalid."""
     current = settings.get('active_ai_provider')
     for p in AI_PROVIDER_REGISTRY:
-        if p['id'] == current and settings.get(p['key_setting']):
+        if p['id'] == current and _provider_available(p):
             return current
     # Current is invalid or missing — prefer the first provider of the same
     # major (ids change when the model list is rebuilt), else the first
     # provider with a key.
     current_major = current.split(':')[0] if current else None
     for p in AI_PROVIDER_REGISTRY:
-        if p['major'] == current_major and settings.get(p['key_setting']):
+        if p['major'] == current_major and _provider_available(p):
             settings['active_ai_provider'] = p['id']
             return p['id']
     for p in AI_PROVIDER_REGISTRY:
-        if settings.get(p['key_setting']):
+        if _provider_available(p):
             settings['active_ai_provider'] = p['id']
             return p['id']
     settings['active_ai_provider'] = None
     return None
 
 _ensure_active_ai_provider()
+
+
+# The local model is kept running only while it is the active provider: it
+# is started (loaded into memory) when chosen, and stopped as soon as a cloud
+# provider is chosen instead, or when this process exits.
+_local_model_in_use = None      # the backend model name while active
+
+
+def _apply_active_provider(provider_id):
+    """Starts or stops the local model to match the active provider.
+    Call after every change of active_ai_provider."""
+    global _local_model_in_use
+    model = _current_local_model() if provider_id == LOCAL_PROVIDER_ID else None
+    if model is None:
+        local_models.stop(background=True)      # a no-op when nothing runs
+    elif model != _local_model_in_use:
+        local_models.start(model)
+    _local_model_in_use = model
+
+# At startup only a local active provider needs acting on (bring the model
+# up); with a cloud provider active there is nothing of ours to stop.
+if settings.get('active_ai_provider') == LOCAL_PROVIDER_ID:
+    _apply_active_provider(LOCAL_PROVIDER_ID)
 
 def _get_or_create_debug_token():
     """Return a stable debug token from settings, creating one if absent or stale (>24h)."""
@@ -260,6 +336,8 @@ from . import action_log
 notebook = Plainbook(notebook_path, debug=args.debug, dump_ai_requests=args.dump_ai_requests)
 assert notebook.kc is not None
 assert notebook.km.is_alive()
+# The local model server (if this process started one) must not outlive us.
+atexit.register(local_models.stop)
 action_log.LOGVIEW_ENABLED = args.logview
 action_log.bind(notebook, args.log and not args.logview)
                     
@@ -338,6 +416,7 @@ def _watchdog():
                 notebook._shutdown()      # terminate the snapshot kernel
             except Exception as e:
                 print(f"Error shutting down the kernel: {e}")
+            local_models.stop()           # and the local model server, if ours
             # os._exit, not sys.exit: this is not the main thread (run() owns
             # it), so sys.exit would unwind only this one. atexit therefore will
             # not fire, which is exactly why the kernel is terminated above. The
@@ -413,6 +492,7 @@ def get_notebook():
         debug=args.debug,
         active_ai_provider=settings.get('active_ai_provider'),
         ai_providers=AI_PROVIDER_REGISTRY,
+        local_model=settings.get('local_model'),
         is_codespace=_in_codespace,
         chromeless=LAUNCHED_CHROMELESS,
         log_enabled=args.log and not args.logview,
@@ -459,6 +539,7 @@ def set_key():
     # The available models depend on the keys, so rebuild the provider list.
     _build_provider_registry()
     active = _ensure_active_ai_provider()
+    _apply_active_provider(active)
     return dict(
         status='success',
         active_ai_provider=active,
@@ -478,13 +559,14 @@ def set_active_ai():
         return dict(status='error', message=f'Unknown provider: {provider_id}')
     for p in AI_PROVIDER_REGISTRY:
         if p['id'] == provider_id:
-            if not settings.get(p['key_setting']):
+            if not _provider_available(p):
                 return dict(status='error', message=f'No API key set for {p["name"]}')
             break
     try:
         _save_settings(active_ai_provider=provider_id)
     except Exception as e:
         return dict(status='error', message=str(e))
+    _apply_active_provider(provider_id)
     return dict(status='success', active_ai_provider=provider_id)
 
 @post('/set_explain_options')
@@ -507,6 +589,99 @@ def set_explain_options():
         return dict(status='error', message=str(e))
     return dict(status='success', explanation_detail=detail,
                 explanation_bullets=bullets, explanation_latex=latex)
+
+# ── Local models ───────────────────────────────────────────────────────────
+# The Settings panel drives these directly (not through the Save button), since
+# a model download takes minutes: /setup starts it, /status is polled.
+
+def _local_model_status():
+    return dict(
+        status='success',
+        **local_models.status(settings.get('local_model')),
+        ai_providers=AI_PROVIDER_REGISTRY,
+        active_ai_provider=settings.get('active_ai_provider'),
+    )
+
+
+def _select_local_model(model_id):
+    """Records `model_id` as the local model and refreshes the registry.
+    Called from the routes, and by the setup job when a download completes."""
+    _save_settings(local_model=model_id)
+    _refresh_local_providers()
+
+
+@get('/local_model/status')
+@require_token
+def local_model_status():
+    return _local_model_status()
+
+
+@post('/local_model/setup')
+@action_log.logged('local_model_setup')
+@require_token
+def local_model_setup():
+    """Downloads the runtime (if missing) and the model, in the background."""
+    data = request.json or {}
+    model_id = data.get('model')
+    try:
+        job = local_models.start_setup(model_id, reinstall=bool(data.get('reinstall')),
+                                       on_done=_select_local_model)
+    except LocalModelError as e:
+        return dict(status='error', message=str(e))
+    return dict(status='success', job=job)
+
+
+@post('/local_model/cancel')
+@action_log.logged('local_model_cancel')
+@require_token
+def local_model_cancel():
+    local_models.cancel_setup()
+    return _local_model_status()
+
+
+@post('/local_model/select')
+@action_log.logged('local_model_select')
+@require_token
+def local_model_select():
+    """Makes an installed model the local model offered in the navbar."""
+    data = request.json or {}
+    model_id = data.get('model')
+    entry = local_models.catalog_entry(model_id)
+    if entry is None:
+        return dict(status='error', message=f'Unknown local model: {model_id}')
+    try:
+        if entry['backend_name'] not in local_models.get_backend().installed_models():
+            return dict(status='error', message=f'{entry["label"]} is not installed.')
+        _select_local_model(model_id)
+    except Exception as e:
+        return dict(status='error', message=str(e))
+    return _local_model_status()
+
+
+@post('/local_model/remove')
+@action_log.logged('local_model_remove')
+@require_token
+def local_model_remove():
+    """Deletes a downloaded model; if it was the local model, none is left."""
+    data = request.json or {}
+    model_id = data.get('model')
+    entry = local_models.catalog_entry(model_id)
+    if entry is None:
+        return dict(status='error', message=f'Unknown local model: {model_id}')
+    try:
+        # Deleting needs the server; stopping (after) frees the memory and
+        # terminates the server if this process started it.
+        local_models.get_backend().delete_model(entry['backend_name'])
+        local_models.stop()
+        if settings.get('local_model') == model_id:
+            for store in (settings, _saved_settings):
+                store.pop('local_model', None)
+            _write_settings()
+            _refresh_local_providers()
+    except Exception as e:
+        return dict(status='error', message=str(e))
+    return _local_model_status()
+
 
 def _save_global_flag(key, value):
     """Persist one global boolean setting, and echo it back to the client.
@@ -565,7 +740,7 @@ def propose_amend():
         proposed = notebook.propose_amend(
             api_key, cell_index, text, ai_provider=ai_provider, model=model)
     except Exception as e:
-        friendly = _check_billing_error(e)
+        friendly = _friendly_ai_error(e)
         if friendly:
             return dict(status='error', message=friendly)
         raise
@@ -744,16 +919,25 @@ def _get_ai_config():
         return None, None, None, 'No AI provider is active. Please set an API key in Settings.'
     for p in AI_PROVIDER_REGISTRY:
         if p['id'] == ai_provider:
-            api_key = settings.get(p['key_setting'])
-            if not api_key:
+            if not _provider_available(p):
                 return None, None, None, f'{p["name"]} API key not set.'
-            return api_key, p['major'], p['model'], None
+            if p['id'] == LOCAL_PROVIDER_ID:
+                # No key; the model is whatever Settings currently says.
+                model = _current_local_model()
+                if model is None:
+                    return None, None, None, 'No local model is set up. Open Settings to set one up.'
+                return None, p['major'], model, None
+            return settings.get(p['key_setting']), p['major'], p['model'], None
     return None, None, None, f'Unknown AI provider: {ai_provider}'
 
 _BILLING_KEYWORDS = ['credit balance', 'billing', 'quota', 'rate limit', 'resource exhausted', 'exceeded your current']
 
-def _check_billing_error(e):
-    """If e looks like an AI billing/rate-limit error, return a friendly message; else None."""
+def _friendly_ai_error(e):
+    """If e is an AI failure the user can act on -- a billing/rate-limit
+    error, or the local model not being set up -- return its message for the
+    client; else None (the route re-raises)."""
+    if isinstance(e, LocalModelError):
+        return str(e)
     msg = str(e).lower()
     if any(kw in msg for kw in _BILLING_KEYWORDS):
         return ('AI usage limit reached. Please check your AI provider billing '
@@ -792,7 +976,7 @@ def generate_code_cell():
         # The AI asked questions; the cell source is untouched.
         return dict(status='needs_clarification', questions=e.questions)
     except Exception as e:
-        friendly = _check_billing_error(e)
+        friendly = _friendly_ai_error(e)
         if friendly:
             return dict(status='error', message=friendly)
         raise
@@ -822,7 +1006,7 @@ def generate_test_code():
             api_key, cell_index, ai_provider=ai_provider,
             model=model, validation_feedback=validation_feedback)
     except Exception as e:
-        friendly = _check_billing_error(e)
+        friendly = _friendly_ai_error(e)
         if friendly:
             return dict(status='error', message=friendly)
         raise
@@ -861,7 +1045,7 @@ def validate_code_cell():
     try:
         validation_result = notebook.validate_code_cell(api_key, cell_index, ai_provider=ai_provider, model=model)
     except Exception as e:
-        friendly = _check_billing_error(e)
+        friendly = _friendly_ai_error(e)
         if friendly:
             return dict(status='error', message=friendly)
         raise
@@ -891,7 +1075,7 @@ def explain_code_cell():
             use_bullets=use_bullets, use_latex=use_latex,
             ai_provider=ai_provider, model=model)
     except Exception as e:
-        friendly = _check_billing_error(e)
+        friendly = _friendly_ai_error(e)
         if friendly:
             return dict(status='error', message=friendly)
         raise
@@ -917,7 +1101,7 @@ def validate_unit_test_code():
             api_key, cell_index, test_name, role,
             ai_provider=ai_provider, model=model)
     except Exception as e:
-        friendly = _check_billing_error(e)
+        friendly = _friendly_ai_error(e)
         if friendly:
             return dict(status='error', message=friendly)
         raise
@@ -949,7 +1133,7 @@ def verify_notebook():
     try:
         result = notebook.verify_notebook(api_key, ai_provider=ai_provider, model=model)
     except Exception as e:
-        friendly = _check_billing_error(e)
+        friendly = _friendly_ai_error(e)
         if friendly:
             return dict(status='error', message=friendly)
         raise
@@ -1391,7 +1575,7 @@ def generate_unit_test_code():
             ask_questions=settings.get('ask_questions', DEFAULT_ASK_QUESTIONS),
             skip_regeneration=settings.get('skip_regeneration', DEFAULT_SKIP_REGENERATION))
     except Exception as e:
-        friendly = _check_billing_error(e)
+        friendly = _friendly_ai_error(e)
         if friendly:
             return dict(status='error', message=friendly)
         raise

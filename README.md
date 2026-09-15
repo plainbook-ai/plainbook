@@ -52,7 +52,9 @@ plainbook notebook.plnb
 
 You can use any file name you like, with any extension you like. 
 
-**AI API Keys.** You need a Gemini, Claude, or OpenAI API key to use Plainbook. Click on the Settings button (the gear on the top right) to see instructions on how to set them. Usage costs are typically low for regular notebook work.
+**AI API Keys.** You need a Gemini, Claude, or OpenAI API key to use Plainbook, unless you set up a local model (below). Click on the Settings button (the gear on the top right) to see instructions on how to set them. Usage costs are typically low for regular notebook work.
+
+**Running without an API key (local model).** Plainbook can also run an open-weights model on your own computer, for free. In Settings, under *Local model*, click *Download & set up*: Plainbook downloads the [Ollama](https://ollama.com) runtime into `~/.config/plainbook/ollama/` (no administrator rights needed; about 160 MB on macOS, 1.4 GB on Linux and Windows, or it uses an Ollama you already have) and then the model, `gpt-oss:20b` (about 14 GB, kept in Ollama's usual `~/.ollama/models`). The model needs a computer with at least 16 GB of memory. Once set up, choose *Local: GPT-OSS 20B* from the AI model dropdown in the navbar. The model is loaded when you select it and unloaded as soon as you switch to a cloud model or close Plainbook. Local models are slower and less capable than the cloud ones, but they are a way to try Plainbook, and to work privately, at no cost. *Remove* in Settings deletes the model from your disk.
 
 ### Key Features
 
@@ -81,7 +83,7 @@ Differently from standard Jupyter notebooks, Plainbooks cells are guaranteed to 
 
 **AI Providers**
 Plainbook is designed to work with multiple AI providers, and users can choose which provider to use for code generation and checking.  The system is designed to allow users to easily switch between providers, so that users can cross-check that the implementation obtained from one provider is considered valid by another provider.  This avoids over-reliance on a single class of AI models. 
-Currently, Plainbook supports Gemini, Claude, and OpenAI models.  You will need an API key for at least one such provider to use Plainbook.
+Currently, Plainbook supports Gemini, Claude, and OpenAI models, and a local open-weights model (gpt-oss:20b via Ollama).  You will need an API key for at least one cloud provider, or a local model set up in Settings, to use Plainbook.
 
 
 ## Papers

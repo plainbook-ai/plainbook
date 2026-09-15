@@ -261,6 +261,9 @@ mjx-container[display="true"] {
 .settings-key-status { color: var(--bulma-text-weak); background-color: var(--bulma-scheme-main-bis); font-style: italic; }
 .settings-key-masked { cursor: pointer; color: var(--bulma-text-weak); background-color: var(--bulma-scheme-main-bis); }
 .settings-bedrock-status { color: var(--bulma-success); background-color: var(--bulma-scheme-main-bis); font-style: italic; }
+// Local model section (LocalModelPanel.js)
+.local-model-row { padding: 0.75rem 1rem; margin-bottom: 0.75rem; }
+.local-model-progress .progress { flex: 1; }
 
 // ── Input file browser (InputFile.js) ──
 .file-browser { background: var(--bulma-scheme-main); }
@@ -296,6 +299,8 @@ mjx-container[display="true"] {
 
 // ── AppNavbar dropdown header ──
 .ai-provider-header { cursor: default; font-size: 0.8em; text-transform: uppercase; color: var(--bulma-text-weak); }
+// The provider list can be long (several models per vendor): scroll it.
+.ai-provider-menu .dropdown-content { max-height: 70vh; overflow-y: auto; }
 
 // ── Output renderer ──
 .output-text { color: var(--bulma-text); }

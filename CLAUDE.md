@@ -28,6 +28,8 @@ The main files are as follows:
 * gemini.py : interface to Gemini LLM for code generation and verification.
 * claude.py : interface to Claude LLM for code generation and verification.
 * openai.py : interface to OpenAI LLM for code generation and verification.
+* local_gpt_oss.py : interface to a local open-weights model (gpt-oss through Ollama); same functions as the cloud providers, `api_key` ignored.
+* local_models.py : the local model machinery: model catalog, Ollama runtime download into `~/.config/plainbook/ollama/`, model pull/delete, `ollama serve` subprocess start/stop, the background setup job polled by the Settings panel (`js/LocalModelPanel.js`). Only one local model is configured, globally (`local_model` in settings.yaml); it is stopped when a cloud model is selected or Plainbook exits.
 
 ### Client Code
 

@@ -1,4 +1,5 @@
 import { ref, reactive, watch } from './vue.esm-browser.js';
+import LocalModelPanel from './LocalModelPanel.js';
 
 // The providers whose API keys are managed here.  `id` is the prefix of the
 // `<id>_api_key` setting and of the `has<Id>Key` prop.
@@ -9,10 +10,14 @@ const KEY_PROVIDERS = [
 ];
 
 export default {
+    components: { LocalModelPanel },
     props: ['isActive', 'isCodespace', 'hasGeminiKey', 'hasClaudeKey', 'hasOpenaiKey', 'claudeViaBedrock',
             'askQuestions', 'explanationDetail', 'explanationBullets', 'explanationLatex',
-            'fixErrorAmendsDescription', 'skipRegeneration'],
-    emits: ['close', 'save'],
+            'fixErrorAmendsDescription', 'skipRegeneration', 'authToken'],
+    // providers-changed: the local model panel changed the available AI
+    // providers (payload {ai_providers, active_ai_provider}); it acts at once,
+    // independently of Save.
+    emits: ['close', 'save', 'providers-changed'],
     setup(props, { emit }) {
         // Per-provider key state, keyed by provider id.
         const localKeys = reactive({});   // text typed into the key input
@@ -117,6 +122,10 @@ export default {
                         </a>
                     </p>
                 </div>
+                <hr>
+                <local-model-panel :auth-token="authToken" :is-active="isActive"
+                                   @providers-changed="$emit('providers-changed', $event)">
+                </local-model-panel>
                 <hr>
                 <div class="field">
                     <label class="label">Code generation</label>
