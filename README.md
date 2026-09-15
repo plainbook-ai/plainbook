@@ -1,18 +1,13 @@
 # <img src="https://github.com/plainbook-ai/plainbook/raw/main/plainbook/images/Plainbook_logo.png" height="30"> Plainbook: Natural Language Notebooks
 
-A Plainbook is a computational notebook, similar to [Jupyter notebooks](https://jupyter.org/), but written in natural language rather than code: 
+Plainbooks are computational notebooks written in natural langauge, so anyone can read and modify them, without requiring coding knowlege. 
+The goal of hte Plainbook project is to repliate what made [Jupyter notebooks](https://jupyter.org/) successful, namely the ability to present code and results together in a reproducible and verifiable way, while making them accessible to anyone.
 
+Plainbook features: 
 - **Natural language:** Describe what you want in plain English; AI generates and validates the code. 
 - **Multiple AI providers:** Use Gemini, Claude, or OpenAI model, or free open-weights local models, to generate and validate code. 
 - **Built-in testing:** You can test cells with data, to check that the code correctly implements the natural language.
 - **Shareable & reproducible:** Anyone who can understand natural language can make sense of your notebooks, and adapt them to their own data and needs.
-
-Normally you would generate a notebook with AI and then keep the code, discarding the natural language that produced it. 
-Plainbook keeps the language instead: the code is generated and executed automatically, and can be validated and tested through natural language and data inspection — no coding knowledge required.
-This lets you share your data analysis and science with a much wider audience, including people who don't know how to code.
-
-The goal of the project is to replicate in natural language what made Jupyter so successful: sharing code and results together, so that any recipient can validate and modify what they receive. 
-Recipients can check that the generated code implements the natural-language tasks, and can edit the Plainbook, regenerate the code, and rerun it — just as in Jupyter or Marimo.
 
 You can read more about the design phylosophy of Plainbook, and its code testing approach, in the paper  [Plainbook: Data Science, in Plain Language](https://arxiv.org/abs/2607.05717). 
 
@@ -50,14 +45,13 @@ You can use any file name you like, with any extension you like.
 
 ## AI Models
 
-Plainbook needs access to an AI model to generate and validate code from natural language.  You can use: 
+Plainbook needs an AI model to generate and validate code.  You can use: 
 
-* **Local open-weights model** (gpt-oss:20b via Ollama).  Go to Settings, under Local Models, click *Download & set up*.  
-This works (tested) on a MacBook Air M3 with 24GB of memory, and may work well on other computers with at least 16GB of memory.  Code generation is slower than with cloud models, but this is free and private. 
-* **Gemini, Claude, or OpenAI** cloud models.  These are faster and more capable than the local model, but require an API key and incur usage costs. To use these models click on Settings, and add an API key for the model of choice.  If you do not have an API key already, follow the links for the model vendors to obtain one.  You can add multiple API keys.
+* **Local open-weights model** (gpt-oss:20b via Ollama).  Go to Settings, under Local Models, click *Download & set up*.  This works (tested) on a MacBook Air M3 with 24GB of memory, and may work well on other computers with at least 16GB of memory.  Code generation is slower than with cloud models, but it is free and private. 
 
-You can add multiple models, and easily switch between them for code generation and validation.
+* **Gemini, Claude, or OpenAI** cloud models. Go to Settings, and add one or more API keys.  To obtain API keys, follow the links for the model vendors.
 
+You can easily switch between the models in the AI model dropdown in the navbar. 
 
 ## Plainbook Structure
 
