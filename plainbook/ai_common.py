@@ -610,15 +610,52 @@ def parse_generate_response(text):
     return code, None
 
 
+# The verdict is asked for as a bare YES or NO at the start of the reply, but
+# models dress it up: Claude has been seen to answer "**YES**", and a heading, a
+# block quote, a list marker, surrounding quotes or a tick are all just as
+# likely. Rather than enumerate the decorations, skip everything at the front
+# that is not a letter and read the letters that follow: if they spell YES or NO
+# and a letter does not continue them, that is the verdict. A plain
+# startswith("YES") saw none of this and fell through to the "no verdict"
+# branch, which reports the cell as invalid -- so a model saying YES was shown
+# to the user in a red bar.
+# Matched, rather than searched, on purpose: a YES or NO further into the text is
+# prose, not a verdict, and "there is no error" would read as a rejection.
+# The trailing guard is a lookahead for a letter rather than \b, because \b
+# treats the underscore of "__YES__" as a word character and so would not fire
+# there. Either way it stops "NOTE:" and "Nothing is wrong" matching NO, which
+# the old startswith("NO") did not: both were read as rejections.
+VALIDATION_VERDICT_PATTERN = re.compile(
+    r"""^[^A-Za-z]*              # whatever precedes the verdict: ** ## > - " ` ( space
+        (?P<verdict>YES|NO)      # the verdict, in any case...
+        (?![A-Za-z])             # ...not merely the start of NOTE or YESTERDAY
+        [^A-Za-z0-9\n]*          # the markup and punctuation closing it, on its own line
+        \n?\s*                   # and the break to the explanation
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
 def parse_validation_response(text):
     """Parse a YES/NO validation response into a result dict."""
-    r = text.strip()
-    if r.upper().startswith("YES"):
-        return dict(is_valid=True, message=clean_start(r[3:]))
-    elif r.upper().startswith("NO"):
-        return dict(is_valid=False, message=clean_start(r[2:]))
-    else:
-        return dict(is_valid=False, message=r)
+    r = (text or "").strip()
+    match = VALIDATION_VERDICT_PATTERN.match(r)
+    if match:
+        # Slice at the end of the match rather than by a fixed offset, so the
+        # verdict and its decorations are dropped whatever form they arrived in.
+        # Note what the pattern stops at, which is the whole reason it is not
+        # simply "every leading non-letter": a newline, so that a message opening
+        # with a markdown bullet keeps it (clean_start used to eat that "-",
+        # leaving the first item of a list unbulleted and the rest bulleted), and
+        # a digit, so "YES. 3 columns are built" does not lose the 3.
+        return dict(is_valid=match.group("verdict").upper() == "YES",
+                    message=r[match.end():].strip())
+    # No verdict to be found. Fail closed -- an unreviewed cell must not look
+    # approved -- but say why, because the reply itself may read as approval and
+    # a bare red bar over approving text is baffling.
+    return dict(is_valid=False,
+                message="The AI did not begin its answer with YES or NO, so its "
+                        "verdict could not be read. Its reply follows.\n\n" + r)
 
 
 def parse_verify_response(text):
