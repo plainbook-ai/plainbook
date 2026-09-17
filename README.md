@@ -15,7 +15,7 @@ You can read more about the design philosophy of Plainbook, and its code testing
 
 ## Try Plainbook Now
 
-**Quick Start Videos:**
+**Videos**
 * [30-second demo](https://youtu.be/0t4ND8wPoYA)
 * [5-minute introduction](https://youtu.be/Mkv5cl5rA7s)
 
@@ -25,7 +25,7 @@ You can read more about the design philosophy of Plainbook, and its code testing
 3. Click **Open in Browser** for port 8080; the Soccer World Cup example is already open
 4. A trial Claude API key is provided; you can add your own in Settings
 
-**Example Notebooks:**
+**Example Notebooks**
 
 <a href="https://github.com/plainbook-ai/plainbook/raw/main/plainbook/images/SoccerExample.png"><img src="https://github.com/plainbook-ai/plainbook/raw/main/plainbook/images/SoccerExample.png" width="420" title="Click to enlarge" alt="A plainbook analyzing soccer World Cup data, showing plain-language cells next to the code generated from them"></a>
 
@@ -78,21 +78,20 @@ You can also create **unit tests** for Plainbook cells. These tests generate sim
 
 Alongside the cells, three notebook-wide tools are available from the navbar and from the panel above the first cell.
 
-### Accessing files
+**Accessing files**
 
 You can use the **Files** panel allows you to select the data files that will be used in the notebook. 
 
-### Verification
+**Verification**
 
 You can use a **verify** button in the navbar to ask the AI to audit the notebook as a whole.
 For every cell it checks two things: that the code really does what the cell's explanation says, and that the code does nothing dangerous.
 
-
-### AI Instructions
+**AI Instructions**
 
 The **Instructions** panel holds guidance that is appended to every code-generation request in that notebook — for example, "always label the axes of plots", or "prefer polars over pandas".
 
-### Linear Execution
+**Linear Execution**
 
 Unlike standard Jupyter notebooks (and like [Marimo](https://marimo.io)), Plainbook cells are guaranteed to be executed in order, from first to last, matching the order in which humans read the cells. 
 Plainbook relies on a [checkpointing kernel](https://github.com/plainbook-ai/snapshot-kernel) to remember the execution state after each cell, so that it can re-run a cell without having to start from the beginning.  
@@ -120,40 +119,9 @@ Local models are slower and less capable than the cloud ones, but they are a way
 
 * L. de Alfaro, M. Aubert, R. Jhala, E. Pastor, E. Baralis. [_Plainbook: Data Science, in Plain Language_](https://arxiv.org/abs/2607.05717), July 2026.
 
-## Citing Plainbook
 
-To cite **the software**, use the Zenodo record — it has its own author list,
-which is not the same as the paper's:
+To cite Plainbook, you can cite [the software](https://github.com/plainbook-ai/plainbook/blob/main/doc/plainbook-software.bib), or [the paper](https://github.com/plainbook-ai/plainbook/blob/main/doc/plainbook-paper.bib).
 
-> L. de Alfaro, M. Aubert, R. Jhala, D. Soni, U. Ejiogu, E. Pastor, E. Baralis.
-> _Plainbook: Natural Language Notebooks_ (software). BSD 3-Clause.
-> https://doi.org/10.5281/zenodo.22100743
-
-```bibtex
-@software{plainbook,
-  title     = {Plainbook: Natural Language Notebooks},
-  author    = {de Alfaro, Luca and Aubert, Mathis and Jhala, Ranjit and
-               Soni, Dhyan and Ejiogu, Uchechi and Pastor, Eliana and
-               Baralis, Elena},
-  year      = {2026},
-  doi       = {10.5281/zenodo.22100743},
-  url       = {https://github.com/plainbook-ai/plainbook},
-  license   = {BSD-3-Clause}
-}
-```
-
-To cite the design and the testing approach, cite the paper:
-
-```bibtex
-@article{plainbook-paper,
-  title   = {Plainbook: Data Science, in Plain Language},
-  author  = {de Alfaro, Luca and Aubert, Mathis and Jhala, Ranjit and
-             Pastor, Eliana and Baralis, Elena},
-  journal = {arXiv preprint arXiv:2607.05717},
-  year    = {2026},
-  doi     = {10.48550/arXiv.2607.05717}
-}
-```
 ## Resources
 
 * [GitHub Repository](https://github.com/plainbook-ai/plainbook).
@@ -162,19 +130,17 @@ To cite the design and the testing approach, cite the paper:
 
 ## Contributors
 
-To contribute to Plainbook, please see [CONTRIBUTING.md](CONTRIBUTING.md) for
-the licensing terms, and [DEVELOP.md](DEVELOP.md) for development setup.
+To contribute to Plainbook, please see [CONTRIBUTING.md](https://github.com/plainbook-ai/plainbook/blob/main/CONTRIBUTING.md) for the licensing terms, and [DEVELOP.md](https://github.com/plainbook-ai/plainbook/blob/main/DEVELOP.md) for development setup.
 
 * [Luca de Alfaro](https://github.com/lucadealfaro), lead developer, UC Santa Cruz. 
 * [Mathis Aubert](https://github.com/Maths-A), UC Santa Cruz. 
 * [Ranjit Jhala](https://ranjitjhala.github.io/), UC San Diego. 
-* [Dhyan Soni](). 
-* [Uchechi Ejiogu]().
+* [Dhyan Soni](https://github.com/dhyantsoni). 
+* [Uchechi Ejiogu](https://github.com/zuchichi).
 * [Eliana Pastor](https://elianap.github.io/), Politecnico di Torino.
 * [Elena Baralis](https://www.polito.it/en/staff?p=elena.baralis), Politecnico di Torino.
 
 ## License
 
-Plainbook is released under the [BSD 3-Clause license](LICENSE.md).
-Contributions are accepted under the same license — see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+Plainbook is released under the [BSD 3-Clause license](https://github.com/plainbook-ai/plainbook/blob/main/LICENSE.md).
+Contributions are accepted under the same license — see [CONTRIBUTING.md](https://github.com/plainbook-ai/plainbook/blob/main/CONTRIBUTING.md).
