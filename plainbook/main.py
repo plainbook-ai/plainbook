@@ -1026,6 +1026,14 @@ def execute_test_cell():
     try:
         outputs = notebook.execute_test_cell(cell_index)
         return dict(status='ok', outputs=outputs)
+    except CellExecutionError:
+        # A test that raises -- an assertion that caught something, most often --
+        # is a result to show, not a request that failed. execute_test_cell has
+        # already appended the error output to the cell, so hand it back the way
+        # /execute_cell and /run_unit_test_cell do; without this the outputs were
+        # dropped and the cell went on showing whatever it printed last time.
+        return dict(status='ok', details='CellExecutionError',
+                    outputs=notebook.nb.cells[cell_index].get('outputs', []))
     except NotImplementedError as e:
         return dict(status='error', message=str(e))
     except Exception as e:

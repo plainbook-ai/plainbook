@@ -2292,7 +2292,6 @@ class Plainbook:
         with self._lock:
             if self.ai_request_pending:
                 raise RuntimeError("An AI request is already pending.")
-            self.ai_request_pending = True
             assert 0 <= index < len(self.nb.cells)
             cell = self.nb.cells[index]
             assert cell.cell_type in ('code', 'test')
@@ -2302,6 +2301,7 @@ class Plainbook:
             previous_code_cell = self._get_preceding_code_cell(index)
             variable_context = self._get_variables_for_ai(previous_code_cell) if previous_code_cell else ""
             try:
+                self.ai_request_pending = True
                 validate_fn = AI_PROVIDERS[ai_provider]["validate"]
                 validation_result = validate_fn(api_key, previous_code, code_to_validate,
                                                 instructions, variable_context=variable_context,
@@ -2324,7 +2324,6 @@ class Plainbook:
         with self._lock:
             if self.ai_request_pending:
                 raise RuntimeError("An AI request is already pending.")
-            self.ai_request_pending = True
             assert 0 <= index < len(self.nb.cells)
             cell = self.nb.cells[index]
             assert cell.cell_type in ('code', 'test')
@@ -2334,6 +2333,7 @@ class Plainbook:
             previous_code_cell = self._get_preceding_code_cell(index)
             variable_context = self._get_variables_for_ai(previous_code_cell) if previous_code_cell else ""
             try:
+                self.ai_request_pending = True
                 explain_fn = AI_PROVIDERS[ai_provider]["explain"]
                 explanation = explain_fn(api_key, previous_code, code_to_explain,
                                          instructions, variable_context=variable_context,
@@ -2367,7 +2367,6 @@ class Plainbook:
         with self._lock:
             if self.ai_request_pending:
                 raise RuntimeError("An AI request is already pending.")
-            self.ai_request_pending = True
             assert 0 <= cell_index < len(self.nb.cells)
             target_cell = self.nb.cells[cell_index]
             tests = target_cell.metadata.get('unit_tests', {})
@@ -2385,6 +2384,7 @@ class Plainbook:
                 target_variables = unit_test['cells'].get('target', {}).get('variables', {})
                 variable_context = self._format_variables_for_ai(target_variables)
             try:
+                self.ai_request_pending = True
                 validate_fn = AI_PROVIDERS[ai_provider]["validate"]
                 validation_result = validate_fn(
                     api_key, preceding_code, code_to_validate,
@@ -2537,7 +2537,6 @@ class Plainbook:
         with self._lock:
             if self.ai_request_pending:
                 raise RuntimeError("An AI request is already pending.")
-            self.ai_request_pending = True
             provider = AI_PROVIDERS[ai_provider]
             verify_notebook_fn = provider["verify_notebook"]
             verify_tests_fn = provider["verify_tests"]
@@ -2545,6 +2544,7 @@ class Plainbook:
             has_code_cells = any(c.cell_type == 'code' for c in self.nb.cells)
             has_test_cells = any(c.cell_type == 'test' for c in self.nb.cells)
             try:
+                self.ai_request_pending = True
                 notebook_result = None
                 if has_code_cells:
                     payload = self._build_verify_notebook_payload()

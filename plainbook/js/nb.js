@@ -139,8 +139,11 @@ const app = createApp({
         // Configure global error handler
         const app = getCurrentInstance().appContext.app;
 
-        app.config.errorHandler = (err, instance, info) => {
-            console.error("Global error:", err, instance, info);
+        // Recovers from a failed operation: clears the run state and shows the
+        // error. Vue routes errors here only from promises a handler hands back
+        // (see onUnhandledRejection below), so any call site that floats a
+        // promise must call this itself.
+        const reportError = (err) => {
             running.value = false;
             runningActivity.value = { type: null, cellIndex: null };
 
@@ -171,6 +174,31 @@ const app = createApp({
                         cells[err.cellIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
                     }
                 });
+            }
+        };
+
+        app.config.errorHandler = (err, instance, info) => {
+            console.error("Global error:", err, instance, info);
+            reportError(err);
+        };
+
+        // Owns the running / runningActivity lifecycle for the ui_* entry points
+        // below. Everything that flips `running` on goes through here, so the
+        // flag cannot survive a throw: a cell that raises is reported by
+        // throwing (see runOneCell), and before this existed the reset was
+        // written out by hand after the await and was skipped on that path,
+        // leaving the navbar stuck on "Running cell N" with nothing to interrupt.
+        // Returns false when it declined because a run is already in flight, so
+        // callers can skip their follow-up steps; the body's error propagates.
+        const withRunning = async (fn) => {
+            if (running.value) return false;
+            running.value = true;
+            try {
+                await fn();
+                return true;
+            } finally {
+                running.value = false;
+                runningActivity.value = { type: null, cellIndex: null };
             }
         };
 
@@ -535,12 +563,7 @@ const app = createApp({
         };
 
         const ui_validateCode = async (cellIndex) => {
-            if (!running.value) {
-                running.value = true;
-                await validateCode(cellIndex);
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-            }
+            await withRunning(() => validateCode(cellIndex));
         };
 
         const explainCode = async (cellIndex) => {
@@ -567,14 +590,7 @@ const app = createApp({
         };
 
         const ui_explainCode = async (cellIndex) => {
-            if (running.value) return;
-            running.value = true;
-            try {
-                await explainCode(cellIndex);
-            } finally {
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-            }
+            await withRunning(() => explainCode(cellIndex));
         };
 
         const dismissValidation = async (cellIndex) => {
@@ -614,15 +630,7 @@ const app = createApp({
         };
 
         const ui_validateUnitTestCode = async (cellIndex, testName, role) => {
-            if (!running.value) {
-                running.value = true;
-                try {
-                    await validateUnitTestCode(cellIndex, testName, role);
-                } finally {
-                    running.value = false;
-                    runningActivity.value = { type: null, cellIndex: null };
-                }
-            }
+            await withRunning(() => validateUnitTestCode(cellIndex, testName, role));
         };
 
         const dismissUnitTestValidation = async (cellIndex, testName, role) => {
@@ -872,32 +880,39 @@ const app = createApp({
                 body.force_reexecute = true;
             }
             const r = await apiCall('/execute_cell', 'POST', body);
-                if (r.status === 'error') {
-                    throw new Error(r.message || 'Execution failed');
-                } 
-                cell.outputs = r.outputs;
-                console.log('Cell executed:', cellIndex, r.details);
-                // Stop the run when the cell raised (CellExecutionError) or when
-                // its output contains a real failure on stderr (an uncaught
-                // traceback). A warning printed to stderr -- a pandas
-                // DtypeWarning, say -- does not stop the run and does not raise
-                // the app-level error bar: the cell ran. It still shows "Fix
-                // Code", which is driven by the wider outputsHaveError().
-                if (r.details === 'CellExecutionError' || outputsHaveStoppingError(r.outputs)) {
-                    // Locate the actual error across all outputs (it may follow
-                    // normal output), rather than assuming outputs[0].
-                    const info = getErrorInfo(r.outputs) || {};
-                    let err;
-                    if (info.ename === 'ModuleNotFoundError') {
-                        err = new Error('The code uses the Python module ' + (info.evalue || '').split("'")[1] + ', which is not installed. Use the options shown in the cell output to install it or rewrite the code.');
-                    } else if (info.ename === 'FileNotFoundError') {
-                        err = new Error('The notebook cannot find a file it needs. Please select all the required input files using the selector at the top, so that the AI knows where to find them, and re-generate the code. If the files are already selected, you might want to refer to them in a more precise way, for instance citing their full name.');
-                    } else {
-                        err = new Error("Execution error: " + (info.ename || 'Error') + (info.evalue ? ': ' + info.evalue : ''));
-                    }
-                    err.cellIndex = cellIndex;
-                    throw err;
+            if (r.status === 'error') {
+                throw new Error(r.message || 'Execution failed');
+            }
+            cell.outputs = r.outputs;
+            console.log('Cell executed:', cellIndex, r.details);
+            // The user hit Stop while this request was in flight. The kernel
+            // reports its KeyboardInterrupt like any other cell error, so
+            // without this check the cancellation they asked for came back at
+            // them as "Execution error: KeyboardInterrupt" in the error bar.
+            // The traceback is left in the outputs above, which is where a
+            // cancelled cell should show it.
+            if (!running.value) return;
+            // Stop the run when the cell raised (CellExecutionError) or when
+            // its output contains a real failure on stderr (an uncaught
+            // traceback). A warning printed to stderr -- a pandas
+            // DtypeWarning, say -- does not stop the run and does not raise
+            // the app-level error bar: the cell ran. It still shows "Fix
+            // Code", which is driven by the wider outputsHaveError().
+            if (r.details === 'CellExecutionError' || outputsHaveStoppingError(r.outputs)) {
+                // Locate the actual error across all outputs (it may follow
+                // normal output), rather than assuming outputs[0].
+                const info = getErrorInfo(r.outputs) || {};
+                let err;
+                if (info.ename === 'ModuleNotFoundError') {
+                    err = new Error('The code uses the Python module ' + (info.evalue || '').split("'")[1] + ', which is not installed. Use the options shown in the cell output to install it or rewrite the code.');
+                } else if (info.ename === 'FileNotFoundError') {
+                    err = new Error('The notebook cannot find a file it needs. Please select all the required input files using the selector at the top, so that the AI knows where to find them, and re-generate the code. If the files are already selected, you might want to refer to them in a more precise way, for instance citing their full name.');
+                } else {
+                    err = new Error("Execution error: " + (info.ename || 'Error') + (info.evalue ? ': ' + info.evalue : ''));
                 }
+                err.cellIndex = cellIndex;
+                throw err;
+            }
         };
 
 
@@ -912,58 +927,41 @@ const app = createApp({
                     && notebook.value && notebook.value.cells[cellIndex]) {
                 notebook.value.cells[cellIndex].metadata.name = response.cell_name;
             }
-            if (!running.value) {
-                running.value = true;
+            const ran = await withRunning(async () => {
                 await generateCode(cellIndex);
                 await runCells(cellIndex);
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-                // Stay on the cell whose questions the user is answering.
-                if (clarificationPending(cellIndex)) return;
-                const total = notebook.value?.cells?.length ?? 0;
-                const next = Math.min(cellIndex + 1, total - 1);
-                if (next !== cellIndex) setActiveCell(next, true);
-            }
+            });
+            // Stay on the cell whose questions the user is answering.
+            if (!ran || clarificationPending(cellIndex)) return;
+            const total = notebook.value?.cells?.length ?? 0;
+            const next = Math.min(cellIndex + 1, total - 1);
+            if (next !== cellIndex) setActiveCell(next, true);
         };
 
         const ui_saveCodeAndRun = async (content, cellIndex) => {
             await sendCodeToServer(content, cellIndex);
-            if (!running.value) {
-                running.value = true;
-                await runCells(cellIndex);
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-                // Stay on the cell whose questions the user is answering.
-                if (clarificationPending(cellIndex)) return;
-                const total = notebook.value?.cells?.length ?? 0;
-                const next = Math.min(cellIndex + 1, total - 1);
-                if (next !== cellIndex) setActiveCell(next, true);
-            }
+            const ran = await withRunning(() => runCells(cellIndex));
+            // Stay on the cell whose questions the user is answering.
+            if (!ran || clarificationPending(cellIndex)) return;
+            const total = notebook.value?.cells?.length ?? 0;
+            const next = Math.min(cellIndex + 1, total - 1);
+            if (next !== cellIndex) setActiveCell(next, true);
         };
 
         const ui_saveCodeAndRunTest = async (content, cellIndex) => {
             await sendCodeToServer(content, cellIndex);
-            if (!running.value) {
-                running.value = true;
-                await runOneTest(cellIndex);
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-                const total = notebook.value?.cells?.length ?? 0;
-                const next = Math.min(cellIndex + 1, total - 1);
-                if (next !== cellIndex) setActiveCell(next, true);
-            }
+            const ran = await withRunning(() => runOneTest(cellIndex));
+            if (!ran) return;
+            const total = notebook.value?.cells?.length ?? 0;
+            const next = Math.min(cellIndex + 1, total - 1);
+            if (next !== cellIndex) setActiveCell(next, true);
         };
 
 
         const ui_runCell = async (cellIndex, force = false) => {
             flushActiveEdits();
             await waitForPendingSaves();
-            if (!running.value) {
-                running.value = true;
-                await runCells(cellIndex, force);
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-            }
+            await withRunning(() => runCells(cellIndex, force));
         };
 
 
@@ -971,13 +969,10 @@ const app = createApp({
             asRead.value = false;
             flushActiveEdits();
             await waitForPendingSaves();
-            if (!running.value) {
-                running.value = true;
+            await withRunning(async () => {
                 await ui_resetKernel();
                 await runCells(notebook.value.cells.length - 1);
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-            }
+            });
         };
 
 
@@ -990,8 +985,7 @@ const app = createApp({
             asRead.value = false;
             flushActiveEdits();
             await waitForPendingSaves();
-            running.value = true;
-            try {
+            await withRunning(async () => {
                 // Run the whole notebook first so variables and outputs are fresh.
                 await ui_resetKernel();
                 try {
@@ -1016,10 +1010,7 @@ const app = createApp({
                         notebook.value.metadata.verification = r.verification;
                     }
                 }
-            } finally {
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-            }
+            });
         };
 
 
@@ -1039,8 +1030,7 @@ const app = createApp({
             asRead.value = false;
             flushActiveEdits();
             await waitForPendingSaves();
-            if (!running.value) {
-                running.value = true;
+            await withRunning(async () => {
                 // Check for failed validation to pass as context
                 let validationFeedback = null;
                 const cell = notebook.value.cells[cellIndex];
@@ -1060,9 +1050,7 @@ const app = createApp({
                 if (amend && running.value && !clarificationPending(cellIndex)) {
                     await runCells(cellIndex);
                 }
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-            }
+            });
         };
 
         const dismissClarify = (cellIndex) => {
@@ -1112,10 +1100,9 @@ const app = createApp({
             const cell = notebook.value?.cells?.[cellIndex];
             flushActiveEdits();
             await waitForPendingSaves();
-            running.value = true;
-            runningActivity.value = { type: 'folding', cellIndex,
-                cellName: cell?.metadata?.name || null };
-            try {
+            await withRunning(async () => {
+                runningActivity.value = { type: 'folding', cellIndex,
+                    cellName: cell?.metadata?.name || null };
                 const r = await apiCall('/propose_amend', 'POST', {
                     cell_index: cellIndex, text: text.trim() });
                 if (r.status !== 'success') throw new Error(r.message || 'Amend failed');
@@ -1124,10 +1111,7 @@ const app = createApp({
                     : (cell.metadata.explanation || '');
                 foldState.value = { ...foldState.value,
                     [cellIndex]: { status: 'review', original, proposed: r.proposed } };
-            } finally {
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-            }
+            });
         };
 
         // "Save": commit the amended description only (no regeneration/run). The
@@ -1152,14 +1136,10 @@ const app = createApp({
         const ui_acceptAmend = async (cellIndex, editedText) => {
             if (running.value) return;
             await ui_saveAmend(cellIndex, editedText);
-            running.value = true;
-            try {
+            await withRunning(async () => {
                 await generateCodeOneCell(cellIndex, true, null);
                 await runCells(cellIndex);
-            } finally {
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-            }
+            });
         };
 
         // Restores a pair that already ran together, so it needs no AI call.
@@ -1174,15 +1154,11 @@ const app = createApp({
                 if (r.source !== null) cell.source = r.source;
             }
             asRead.value = false;
-            running.value = true;
-            try {
+            await withRunning(async () => {
                 // A legacy snapshot carries no code, so it must be regenerated.
                 if (r.source === null) await generateCodeOneCell(cellIndex, true, null);
                 await runCells(cellIndex);
-            } finally {
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-            }
+            });
         };
 
         // Missing-module installation state, keyed by cell index:
@@ -1191,24 +1167,21 @@ const app = createApp({
         const moduleInstall = ref({});
 
         const ui_installModule = async (cellIndex, moduleName) => {
-            if (running.value) return;
-            running.value = true;
-            runningActivity.value = { type: 'installing', cellIndex, moduleName };
-            moduleInstall.value = { ...moduleInstall.value, [cellIndex]: { status: 'installing' } };
-            try {
-                const r = await apiCall('/install_package', 'POST', { module: moduleName });
-                if (r.status === 'error') throw new Error(r.message || 'Package installation failed');
-                moduleInstall.value = { ...moduleInstall.value,
-                    [cellIndex]: { status: 'done', success: !!r.success, output: r.output || '' } };
-                console.log('Package installed for module:', moduleName, 'success:', r.success);
-            } catch (err) {
-                // Back to the question state; the error bar reports the failure.
-                dismissModuleInstall(cellIndex);
-                throw new Error('Failed to install package for module ' + moduleName, { cause: err });
-            } finally {
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-            }
+            await withRunning(async () => {
+                runningActivity.value = { type: 'installing', cellIndex, moduleName };
+                moduleInstall.value = { ...moduleInstall.value, [cellIndex]: { status: 'installing' } };
+                try {
+                    const r = await apiCall('/install_package', 'POST', { module: moduleName });
+                    if (r.status === 'error') throw new Error(r.message || 'Package installation failed');
+                    moduleInstall.value = { ...moduleInstall.value,
+                        [cellIndex]: { status: 'done', success: !!r.success, output: r.output || '' } };
+                    console.log('Package installed for module:', moduleName, 'success:', r.success);
+                } catch (err) {
+                    // Back to the question state; the error bar reports the failure.
+                    dismissModuleInstall(cellIndex);
+                    throw new Error('Failed to install package for module ' + moduleName, { cause: err });
+                }
+            });
         };
 
         const dismissModuleInstall = (cellIndex) => {
@@ -1308,42 +1281,48 @@ const app = createApp({
             runningActivity.value = { type: 'running', cellIndex, cellName: cell.metadata.name || null };
             asRead.value = false;
             const r = await apiCall('/execute_test_cell', 'POST', { cell_index: cellIndex });
+            // Assigned before anything below can throw: a test that fails is
+            // exactly the case whose output the user needs to see, and leaving
+            // it unassigned left the cell showing the run before this one.
+            if (r.outputs) {
+                cell.outputs = r.outputs;
+            }
             if (r.status === 'error') {
                 const err = new Error(r.message || 'Test execution failed');
                 err.cellIndex = cellIndex;
                 throw err;
             }
-            if (r.outputs) {
-                cell.outputs = r.outputs;
+            console.log('Test cell executed:', cellIndex, r.details);
+            if (!running.value) return; // interrupted; see runOneCell
+            // A test cell that raised: report it the way a code cell is
+            // reported, with the error type the server sent rather than a
+            // flattened message.
+            if (r.details === 'CellExecutionError' || outputsHaveStoppingError(r.outputs)) {
+                const info = getErrorInfo(r.outputs) || {};
+                const err = new Error("Test failed: " + (info.ename || 'Error')
+                    + (info.evalue ? ': ' + info.evalue : ''));
+                err.cellIndex = cellIndex;
+                throw err;
             }
-            console.log('Test cell executed:', cellIndex);
         };
 
         const ui_runTestCell = async (cellIndex) => {
             flushActiveEdits();
             await waitForPendingSaves();
-            if (!running.value) {
-                running.value = true;
-                await runOneTest(cellIndex);
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-            }
+            await withRunning(() => runOneTest(cellIndex));
         };
 
         const ui_runAllTests = async () => {
             flushActiveEdits();
             await waitForPendingSaves();
-            if (!running.value) {
-                running.value = true;
+            await withRunning(async () => {
                 for (let i = 0; i < notebook.value.cells.length; i++) {
                     if (!running.value) break;
                     if (notebook.value.cells[i].cell_type === 'test') {
                         await runOneTest(i);
                     }
                 }
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-            }
+            });
         };
 
         const ui_saveExplanationAndRunTest = async (content, cellIndex) => {
@@ -1352,24 +1331,21 @@ const app = createApp({
                     && notebook.value && notebook.value.cells[cellIndex]) {
                 notebook.value.cells[cellIndex].metadata.name = response.cell_name;
             }
-            if (!running.value) {
-                running.value = true;
+            const ran = await withRunning(async () => {
                 await generateTestCodeOneCell(cellIndex);
                 await runOneTest(cellIndex);
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-                const total = notebook.value?.cells?.length ?? 0;
-                const next = Math.min(cellIndex + 1, total - 1);
-                if (next !== cellIndex) setActiveCell(next, true);
-            }
+            });
+            if (!ran) return;
+            const total = notebook.value?.cells?.length ?? 0;
+            const next = Math.min(cellIndex + 1, total - 1);
+            if (next !== cellIndex) setActiveCell(next, true);
         };
 
         const ui_forceRegenerateTestCode = async (cellIndex) => {
             asRead.value = false;
             flushActiveEdits();
             await waitForPendingSaves();
-            if (!running.value) {
-                running.value = true;
+            await withRunning(async () => {
                 let validationFeedback = null;
                 const cell = notebook.value.cells[cellIndex];
                 const v = cell?.metadata?.validation;
@@ -1378,9 +1354,7 @@ const app = createApp({
                     dismissValidation(cellIndex);
                 }
                 await generateTestCodeOneCell(cellIndex, true, validationFeedback);
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-            }
+            });
         };
 
         // Unit test mode state and methods
@@ -1682,49 +1656,27 @@ const app = createApp({
         const ui_runUnitTest = async (cellIndex, testName) => {
             flushActiveEdits();
             await waitForPendingSaves();
-            if (!running.value) {
-                running.value = true;
-                try {
-                    await executeUnitTest(cellIndex, testName);
-                } finally {
-                    running.value = false;
-                    runningActivity.value = { type: null, cellIndex: null };
-                }
-            }
+            await withRunning(() => executeUnitTest(cellIndex, testName));
         };
 
         const ui_runUnitTestSubcell = async (cellIndex, testName, role) => {
             flushActiveEdits();
             await waitForPendingSaves();
-            if (!running.value) {
-                running.value = true;
-                try {
-                    await ensureUnitTestPrereqs(cellIndex);
-                    if (!running.value) return;
-                    if (role === 'setup') {
-                        await runUnitTestSetup(cellIndex, testName);
-                    } else if (role === 'target') {
-                        await runUnitTestTarget(cellIndex, testName);
-                    } else if (role === 'test') {
-                        await runUnitTestTest(cellIndex, testName);
-                    }
-                } finally {
-                    running.value = false;
-                    runningActivity.value = { type: null, cellIndex: null };
+            await withRunning(async () => {
+                await ensureUnitTestPrereqs(cellIndex);
+                if (!running.value) return;
+                if (role === 'setup') {
+                    await runUnitTestSetup(cellIndex, testName);
+                } else if (role === 'target') {
+                    await runUnitTestTarget(cellIndex, testName);
+                } else if (role === 'test') {
+                    await runUnitTestTest(cellIndex, testName);
                 }
-            }
+            });
         };
 
         const generateUnitTestCode = async (cellIndex, testName, role) => {
-            if (!running.value) {
-                running.value = true;
-                try {
-                    await generateUnitTestCodeInner(cellIndex, testName, role);
-                } finally {
-                    running.value = false;
-                    runningActivity.value = { type: null, cellIndex: null };
-                }
-            }
+            await withRunning(() => generateUnitTestCodeInner(cellIndex, testName, role));
         };
 
         const handleKeydown = (e) => {
@@ -1753,7 +1705,8 @@ const app = createApp({
                     const testName = unitTestActiveTestName.value;
                     if (!testName) return;
                     e.preventDefault();
-                    ui_runUnitTestSubcell(unitTestTargetIndex.value, testName, unitTestActiveSubcell.value);
+                    ui_runUnitTestSubcell(unitTestTargetIndex.value, testName, unitTestActiveSubcell.value)
+                        .catch(reportError);
                     if (unitTestActiveSubcell.value === 'setup') unitTestActiveSubcell.value = 'target';
                     else if (unitTestActiveSubcell.value === 'target') unitTestActiveSubcell.value = 'test';
                 } else {
@@ -1761,7 +1714,7 @@ const app = createApp({
                     e.preventDefault();
                     const cell = notebook.value.cells[activeIndex.value];
                     if (cell && (cell.cell_type === 'code' || cell.cell_type === 'test')) {
-                        ui_runCell(activeIndex.value);
+                        ui_runCell(activeIndex.value).catch(reportError);
                     }
                     const next = Math.min(activeIndex.value + 1, total - 1);
                     if (next !== activeIndex.value) setActiveCell(next);
@@ -1957,11 +1910,16 @@ const app = createApp({
 
         // Not every caller awaits the promise it starts: a click handler may fire
         // a fetch and return, and Vue only routes errors from promises a handler
-        // hands back. A dead server then rejects with nobody listening. Catch the
-        // strays here instead of auditing every call site forever. Left
+        // hands back. Such a rejection reaches neither app.config.errorHandler
+        // nor any catch, so before this recovered the run state a stray could
+        // leave `running` true and the navbar stuck on "Running cell N". Catch
+        // the strays here instead of auditing every call site forever. The
+        // background pollers (sendPing, ActionLogger) carry their own .catch, so
+        // a dropped heartbeat still does not reach the error bar. Left
         // un-prevented so the rejection still reaches the console.
         const onUnhandledRejection = (e) => {
-            if (isServerDown(e.reason)) uiError.value = SERVER_DOWN_MESSAGE;
+            const reason = e.reason;
+            reportError(reason instanceof Error ? reason : new Error(String(reason)));
         };
 
         // ── Telling the server we are still here ──
