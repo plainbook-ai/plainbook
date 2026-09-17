@@ -108,34 +108,39 @@ def test_validation_without_a_verdict_fails_closed(text):
 
 
 @pytest.mark.parametrize("text", VALID_RESPONSES + INVALID_RESPONSES)
-def test_verdict_is_stripped_from_the_message(text):
-    """The message shown to the user must not start with the verdict again."""
-    message = parse_validation_response(text)["message"]
-    assert not message.lstrip("*_`\"' ").upper().startswith(("YES", "NO"))
+def test_verdict_is_kept_in_the_message(text):
+    """The reply is shown as the model wrote it, verdict included.
+
+    The verdict decides is_valid; it is deliberately not excised, so the user
+    can see what the model actually answered."""
+    assert parse_validation_response(text)["message"] == text.strip()
 
 
-def test_message_body_is_preserved():
-    """Markdown in the explanation survives; only the verdict is removed."""
-    result = parse_validation_response("**NO**\n\nIt drops the `Ties` column:\n\n- no groupby")
+def test_message_is_the_reply_verbatim():
+    """Nothing is trimmed from the reply but surrounding whitespace."""
+    reply = "**NO**\n\nIt drops the `Ties` column:\n\n- no groupby"
+    result = parse_validation_response(reply)
     assert result["is_valid"] is False
-    assert result["message"] == "It drops the `Ties` column:\n\n- no groupby"
+    assert result["message"] == reply
 
 
 def test_bulleted_body_keeps_its_first_bullet():
-    """The punctuation eaten after the verdict must not swallow a list marker."""
-    result = parse_validation_response("**YES**\n\n- It iterates over all matches\n- It builds the frame")
+    """A list opening the explanation is untouched, bullet included."""
+    reply = "**YES**\n\n- It iterates over all matches\n- It builds the frame"
+    result = parse_validation_response(reply)
     assert result["is_valid"] is True
-    assert result["message"].startswith("- It iterates")
+    assert result["message"] == reply
 
 
-def test_digits_opening_the_message_survive():
-    """Only punctuation is eaten after the verdict, never content."""
-    result = parse_validation_response("YES. 3 columns are built as asked.")
+def test_digits_opening_the_explanation_survive():
+    reply = "YES. 3 columns are built as asked."
+    result = parse_validation_response(reply)
     assert result["is_valid"] is True
-    assert result["message"] == "3 columns are built as asked."
+    assert result["message"] == reply
 
 
-def test_decorated_verdict_leaves_no_markup_in_the_message():
-    result = parse_validation_response("**YES** -- the frame is correct")
-    assert result["is_valid"] is True
-    assert result["message"] == "the frame is correct"
+def test_unparseable_reply_is_quoted_in_full():
+    reply = "I have reviewed the cell and it looks fine to me."
+    result = parse_validation_response(reply)
+    assert result["is_valid"] is False
+    assert result["message"].endswith(reply)

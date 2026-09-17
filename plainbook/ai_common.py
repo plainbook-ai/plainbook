@@ -629,27 +629,23 @@ VALIDATION_VERDICT_PATTERN = re.compile(
     r"""^[^A-Za-z]*              # whatever precedes the verdict: ** ## > - " ` ( space
         (?P<verdict>YES|NO)      # the verdict, in any case...
         (?![A-Za-z])             # ...not merely the start of NOTE or YESTERDAY
-        [^A-Za-z0-9\n]*          # the markup and punctuation closing it, on its own line
-        \n?\s*                   # and the break to the explanation
     """,
     re.IGNORECASE | re.VERBOSE,
 )
 
 
 def parse_validation_response(text):
-    """Parse a YES/NO validation response into a result dict."""
+    """Parse a YES/NO validation response into a result dict.
+
+    The verdict decides is_valid but is left in the message: the user should see
+    what the model actually said, and the pattern only has to recognise the
+    verdict, not excise it. (Removing it was fiddly as well as unwanted -- it
+    meant deciding whether a dash after the verdict was a separator or the first
+    bullet of the explanation.)"""
     r = (text or "").strip()
     match = VALIDATION_VERDICT_PATTERN.match(r)
     if match:
-        # Slice at the end of the match rather than by a fixed offset, so the
-        # verdict and its decorations are dropped whatever form they arrived in.
-        # Note what the pattern stops at, which is the whole reason it is not
-        # simply "every leading non-letter": a newline, so that a message opening
-        # with a markdown bullet keeps it (clean_start used to eat that "-",
-        # leaving the first item of a list unbulleted and the rest bulleted), and
-        # a digit, so "YES. 3 columns are built" does not lose the 3.
-        return dict(is_valid=match.group("verdict").upper() == "YES",
-                    message=r[match.end():].strip())
+        return dict(is_valid=match.group("verdict").upper() == "YES", message=r)
     # No verdict to be found. Fail closed -- an unreviewed cell must not look
     # approved -- but say why, because the reply itself may read as approval and
     # a bare red bar over approving text is baffling.
