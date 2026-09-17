@@ -320,7 +320,13 @@ export default {
             </div>
             </div>
 
-            <unit-test-help-modal :is-active="showHelp" @close="showHelp = false" />
+            <!-- Teleported to <body>: .notebook-main is a query container, and
+                 container-type makes it the containing block for position:fixed
+                 descendants, which would otherwise pin this modal to the notebook
+                 column instead of the viewport. -->
+            <teleport to="body">
+                <unit-test-help-modal :is-active="showHelp" @close="showHelp = false" />
+            </teleport>
         </div>
     `
 };

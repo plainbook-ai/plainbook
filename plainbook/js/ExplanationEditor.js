@@ -341,6 +341,7 @@ const ExplanationRenderer = {
                                 @click.stop="$emit('run', true)">
                             <span class="icon" style="width: 1.25em;"><i class="bx bx-refresh-cw"></i></span>
                             <span class="icon" style="width: 1.25em;"><i class="bx bx-play"></i></span>
+                            <span>Force Run</span>
                         </button>
                     </div>
                 </template>

@@ -114,7 +114,7 @@ mjx-container[display="true"] {
 }
 
 .explanation-toolbar .toolbar-right .button {
-  @media (max-width: 600px) {
+  @container notebook (max-width: 750px) {
     span:not(.icon):not(.unit-test-counter) {
       display: none !important;
     }
@@ -125,7 +125,7 @@ mjx-container[display="true"] {
 }
 
 .explanation-toolbar .toolbar-left .run-button {
-  @media (max-width: 600px) {
+  @container notebook (max-width: 750px) {
     span:not(.icon) {
       display: none !important;
     }
@@ -244,10 +244,13 @@ mjx-container[display="true"] {
 .code-tabs .code-bar-actions .button .icon {
   height: 1.15em;
 }
-// On narrow screens collapse the action-button labels to icon-only (like the
-// ExplanationEditor toolbar, but at a slightly larger threshold).
+// Collapse the action-button labels to icon-only, on the same signal and at the
+// same threshold as the ExplanationEditor toolbar, so the two bars on a cell
+// always collapse together. Keyed to the width of the notebook column (see the
+// `notebook` container on .notebook-main), not the viewport: the TOC beside it
+// can be resized or closed.
 .code-tabs .code-bar-actions .button {
-  @media (max-width: 700px) {
+  @container notebook (max-width: 750px) {
     span:not(.icon) {
       display: none !important;
     }
@@ -380,6 +383,14 @@ mjx-container[display="true"] {
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+
+  // Query container for the cell toolbars. The width that matters to them is
+  // this column's, not the viewport's: the TOC beside it can be resized or
+  // closed, so the same viewport gives very different room for the buttons.
+  // Named so `@container notebook (...)` cannot accidentally match some other
+  // container that gets introduced closer to the buttons later.
+  container-type: inline-size;
+  container-name: notebook;
 
   // Square off the panel bar where it meets the sidebar and navbar.
   > .panel-container {
