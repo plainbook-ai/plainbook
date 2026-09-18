@@ -15,11 +15,12 @@ import UnitTestView from './UnitTestView.js';
 import NotebookTitle from './NotebookTitle.js';
 import NotebookFileModal from './NotebookFileModal.js';
 import SideIndex from './SideIndex.js';
+import AiSetupBanner from './AiSetupBanner.js';
 import { outputsHaveStoppingError, getErrorInfo } from './errorUtils.js';
 import { serverFetch, isServerDown, SERVER_DOWN_MESSAGE } from './serverFetch.js';
 
 const app = createApp({
-    components: { AppNavbar, NotebookCell, CellInsertionZone, CellLabel, SettingsModal, InfoModal, TestHelpModal, UiError, PanelBar, NotebookHelp, UnitTestView, NotebookTitle, NotebookFileModal, SideIndex },
+    components: { AppNavbar, NotebookCell, CellInsertionZone, CellLabel, SettingsModal, InfoModal, TestHelpModal, UiError, PanelBar, NotebookHelp, UnitTestView, NotebookTitle, NotebookFileModal, SideIndex, AiSetupBanner },
     setup() {
         // Extract token from URL
         const urlParams = new URLSearchParams(window.location.search);

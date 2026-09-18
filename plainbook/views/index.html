@@ -150,6 +150,12 @@
                 </div>
                 <div v-else="notebook">
 
+                    <!-- No API key and no local model: say so here, where the user
+                         is looking, rather than waiting for them to try an AI
+                         action and hit an error. Clears itself once a provider is
+                         configured, in this session, with no reload. -->
+                    <ai-setup-banner v-if="!activeAiProvider" @open-settings="showSettings = true" />
+
                     <template v-for="(cell, index) in notebook.cells" :key="index">
 
                         <!-- Inserts above the cell. Suppressed while the notebook has
