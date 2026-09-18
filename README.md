@@ -72,28 +72,20 @@ Plainbooks consist of three types of cells:
 
 * **Test cells**, where the user can write properties that should hold at certain points of the notebook to check that everything is working as expected.
 
-You can also create **unit tests** for Plainbook cells. These tests generate simple data and feed it to the notebook cells you want to test, enabling you to check that the code generated from natural language is correct.  
-
 ## Working with Notebooks
 
 Alongside the cells, three notebook-wide tools are available from the navbar and from the panel above the first cell.
 
-**Accessing files**
+**Accessing files:** You can use the *Files* panel allows you to select the data files that will be used in the notebook. 
 
-You can use the **Files** panel allows you to select the data files that will be used in the notebook. 
+**Verification:** You can verify that the whole notebook is safe to run, and you can verify that each cell works as intended: 
 
-**Verification**
+* You can use a **Verify button** in the navbar to ask the AI to audit the notebook as a whole, checking that cells are safe to run and implement their descriptions. 
+* You can create **unit tests** for action cells that generate simple data and feed it to the cell, enabling you to check that the cell behaves as intended. 
 
-You can use a **verify** button in the navbar to ask the AI to audit the notebook as a whole.
-For every cell it checks two things: that the code really does what the cell's explanation says, and that the code does nothing dangerous.
+**AI Instructions:** The *Instructions* panel holds guidance that is appended to every code-generation request in that notebook — for example, "always label the axes of plots", or "prefer polars over pandas".
 
-**AI Instructions**
-
-The **Instructions** panel holds guidance that is appended to every code-generation request in that notebook — for example, "always label the axes of plots", or "prefer polars over pandas".
-
-**Linear Execution**
-
-Unlike standard Jupyter notebooks (and like [Marimo](https://marimo.io)), Plainbook cells are guaranteed to be executed in order, from first to last, matching the order in which humans read the cells. 
+**Linear Execution:** Unlike standard Jupyter notebooks (and like [Marimo](https://marimo.io)), Plainbook cells are guaranteed to be executed in order, from first to last, matching the order in which humans read the cells. 
 Plainbook relies on a [checkpointing kernel](https://github.com/plainbook-ai/snapshot-kernel) to remember the execution state after each cell, so that it can re-run a cell without having to start from the beginning.  
 
 ## AI Models
