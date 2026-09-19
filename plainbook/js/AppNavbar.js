@@ -1,8 +1,14 @@
+// Display names of the provider majors used as group headers in the model menu.
+const MAJOR_LABELS = { claude: 'Claude', gemini: 'Gemini', openai: 'OpenAI' };
+// Majors with a single entry that is its own label: no group header for them.
+const UNGROUPED_MAJORS = new Set(['local']);
+
 export default {
-    props: ['isLocked', 'running', 'restarting', 'submitting', 'lastSubmittedAtLabel', 'isUserStudy', 'runningActivity', 'hasNotebook', 'upToDate', 'cellCount', 'hasApiKey', 'debug',
-            'activeAiProvider', 'availableAiProviders', 'shareOutputWithAi', 'aiTokens', 'verification', 'verificationStatus', 'logEnabled', 'logviewEnabled', 'authToken'],
+    props: ['isLocked', 'running', 'restarting', 'submitting', 'lastSubmittedAtLabel', 'isUserStudy', 'runningActivity', 'hasNotebook', 'upToDate', 'cellCount', 'testCellCount', 'hasApiKey', 'debug',
+            'activeAiProvider', 'availableAiProviders', 'shareOutputWithAi', 'aiTokens', 'verification', 'verificationStatus', 'logEnabled', 'logviewEnabled', 'chromeless', 'authToken'],
     emits: [
-        'lock', 'refresh', 'interrupt', 'regenerate-all',
+        'lock', 'refresh', 'interrupt', 'regenerate-all', 'new-notebook', 'copy-notebook',
+        'open-notebook',
         'restart', 'reset-run-all', 'run-all', 'run-all-tests', 'verify-notebook', 'clear-outputs', 'open-info', 'open-settings', 'debug-request',
         'set-ai-provider', 'toggle-share-output', 'reset-tokens', 'download-ipynb', 'submit-study'
         ],
@@ -58,7 +64,11 @@ export default {
             for (const p of this.availableAiProviders) {
                 const major = p.major || p.id;
                 if (major !== lastMajor) {
-                    groups.push({ type: 'header', label: major.charAt(0).toUpperCase() + major.slice(1) });
+                    if (UNGROUPED_MAJORS.has(major)) {
+                        if (groups.length) groups.push({ type: 'divider' });
+                    } else {
+                        groups.push({ type: 'header', label: MAJOR_LABELS[major] || major.charAt(0).toUpperCase() + major.slice(1) });
+                    }
                     lastMajor = major;
                 }
                 groups.push({ type: 'item', provider: p });
@@ -99,6 +109,21 @@ export default {
                                  style="height: 1.5em;">
                         </button>
 
+                        <div v-if="!isUserStudy" class="buttons has-addons mb-0" style="display: inline-flex;">
+                            <button class="button is-light" title="Open an existing plainbook (in its own window)"
+                                    @click="$emit('open-notebook')">
+                                <span class="icon"><i class="bx bx-square"></i></span>
+                            </button>
+                            <button class="button is-light" title="Copy this plainbook under a new name (opens in its own window)"
+                                    @click="$emit('copy-notebook')">
+                                <span class="icon"><i class="bx bx-copy"></i></span>
+                            </button>
+                            <button class="button is-light" title="New plainbook (opens in its own window)"
+                                    @click="$emit('new-notebook')">
+                                <span class="icon"><i class="bx bx-plus"></i></span>
+                            </button>
+                        </div>
+
                         <button v-if="isLocked" class="button is-warning" title="Unlock Notebook" @click="$emit('lock', false)">
                         <span class="icon"><i class="bx bx-lock"></i></span>
                         </button>
@@ -106,14 +131,14 @@ export default {
                         <span class="icon"><i class="bx bx-lock-open"></i></span>
                         </button>
 
-                        <button v-if="!running && hasNotebook"
+                        <!-- <button v-if="!running && hasNotebook"
                             :disabled="cellCount === 0"
                             @click="$emit('clear-outputs')"
                             title="Clear all outputs"
                             class="button is-light">
                             <span class="icon"><i class="bx bx-broom"></i></span>
                             <span>Clear outputs</span>
-                        </button>
+                        </button> -->
 
                         <a v-if="logviewEnabled"
                            :href="'/log_view?token=' + authToken"
@@ -132,12 +157,14 @@ export default {
                             <span>.ipynb</span>
                         </button>
 
-                        <!-- <button v-if="!running && hasNotebook"
+                        <!-- Only in a chromeless window, which has no browser toolbar
+                             and so no reload button of its own. -->
+                        <button v-if="chromeless && !running && hasNotebook"
                             @click="$emit('refresh')"
                             class="button is-light" title="Reload Notebook">
                             <span class="icon"><i class="bx bx-refresh-cw"></i></span>
                             <span>Refresh</span>
-                        </button> -->
+                        </button>
 
                         <button v-if="running && hasNotebook"
                                 @click="$emit('interrupt')"
@@ -151,11 +178,17 @@ export default {
                             <span v-else-if="runningActivity && runningActivity.type === 'validating'">
                                 Validating cell {{ runningActivity.cellIndex + 1 }}<template v-if="runningActivity.cellName">: {{ runningActivity.cellName }}</template>
                             </span>
+                            <span v-else-if="runningActivity && runningActivity.type === 'explaining'">
+                                Explaining code in cell {{ runningActivity.cellName || (runningActivity.cellIndex + 1) }}
+                            </span>
                             <span v-else-if="runningActivity && runningActivity.type === 'verifying'">
                                 Verifying notebook&hellip;
                             </span>
                             <span v-else-if="runningActivity && runningActivity.type === 'running'">
                                 Running cell {{ runningActivity.cellIndex + 1 }}<template v-if="runningActivity.cellName">: {{ runningActivity.cellName }}</template>
+                            </span>
+                            <span v-else-if="runningActivity && runningActivity.type === 'installing'">
+                                Installing module<template v-if="runningActivity.moduleName"> {{ runningActivity.moduleName }}</template>&hellip;
                             </span>
                             <span v-else-if="runningActivity && runningActivity.type === 'unit-test-gen-setup'">
                                 Generating setup code<template v-if="runningActivity.testName"> ({{ runningActivity.testName }})</template>
@@ -210,10 +243,10 @@ export default {
                         </button>
 
                         <button v-if="!running && hasNotebook"
-                            :disabled="cellCount === 0"
+                            :disabled="!testCellCount"
                             @mousedown.prevent
                             @click="$emit('run-all-tests')"
-                            title="Run all tests"
+                            :title="testCellCount ? 'Run all tests' : 'This notebook has no global tests'"
                             class="button is-warning">
                             <span class="icon"><i class="bx bx-seal-check"></i></span>
                             <span>Run tests</span>
@@ -276,10 +309,10 @@ export default {
                                         </span>
                                     </button>
                                 </div>
-                                <div class="dropdown-menu" role="menu" v-if="canSwitchProvider">
+                                <div class="dropdown-menu ai-provider-menu" role="menu" v-if="canSwitchProvider">
                                     <div class="dropdown-content">
                                         <template v-for="(entry, idx) in groupedProviders" :key="idx">
-                                            <hr v-if="entry.type === 'header' && idx > 0" class="dropdown-divider">
+                                            <hr v-if="entry.type === 'divider' || (entry.type === 'header' && idx > 0)" class="dropdown-divider">
                                             <p v-if="entry.type === 'header'" class="dropdown-item has-text-weight-bold ai-provider-header">
                                                 {{ entry.label }}
                                             </p>

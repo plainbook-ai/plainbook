@@ -1,0 +1,14 @@
+{
+  "name": "plainbook-dev-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Development-only checks for the Plainbook client code. Not part of the shipped package.",
+  "license": "BSD-3-Clause",
+  "type": "module",
+  "devDependencies": {
+    "@vue/compiler-dom": "^3.5.0"
+  },
+  "scripts": {
+    "check": "node check-templates.mjs"
+  }
+}

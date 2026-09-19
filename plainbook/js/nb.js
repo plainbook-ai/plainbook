@@ -1,4 +1,5 @@
 import { createApp, ref, computed, onMounted, onBeforeUnmount, nextTick, getCurrentInstance, watch } from './vue.esm-browser.js';
+import { mathjaxDirective } from './markdown.js';
 
 import AppNavbar from './AppNavbar.js';
 import NotebookCell from './NotebookCell.js';
@@ -11,9 +12,15 @@ import UiError from './UiError.js';
 import PanelBar from './PanelBar.js';
 import NotebookHelp from './NotebookHelp.js';
 import UnitTestView from './UnitTestView.js';
+import NotebookTitle from './NotebookTitle.js';
+import NotebookFileModal from './NotebookFileModal.js';
+import SideIndex from './SideIndex.js';
+import AiSetupBanner from './AiSetupBanner.js';
+import { outputsHaveStoppingError, getErrorInfo } from './errorUtils.js';
+import { serverFetch, isServerDown, SERVER_DOWN_MESSAGE } from './serverFetch.js';
 
-createApp({
-    components: { AppNavbar, NotebookCell, CellInsertionZone, CellLabel, SettingsModal, InfoModal, TestHelpModal, UiError, PanelBar, NotebookHelp, UnitTestView },
+const app = createApp({
+    components: { AppNavbar, NotebookCell, CellInsertionZone, CellLabel, SettingsModal, InfoModal, TestHelpModal, UiError, PanelBar, NotebookHelp, UnitTestView, NotebookTitle, NotebookFileModal, SideIndex, AiSetupBanner },
     setup() {
         // Extract token from URL
         const urlParams = new URLSearchParams(window.location.search);
@@ -30,6 +37,20 @@ createApp({
         const explanationEditKey = ref({});
         const isLocked = ref(false);
         const shareOutputWithAi = ref(true);
+        // When true (Settings), the AI may reply with questions instead of code.
+        const askQuestions = ref(false);
+        // Questions awaiting answers: clarifyState[index] = { questions: [...] }.
+        const clarifyState = ref({});
+        // When true (Settings), a cell whose description and inputs are unchanged
+        // is left alone instead of being regenerated.
+        const skipRegeneration = ref(true);
+        // Global "Explain code" options (stored in settings.yaml on the server).
+        const explanationDetail = ref(1);      // 1 Brief .. 4 Expert
+        const explanationBullets = ref(false);
+        const explanationLatex = ref(false);
+        // When true (Settings), "Fix Code" also rewrites the cell's description.
+        // Global, like the options above; the server decides, this is display only.
+        const fixErrorAmendsDescription = ref(true);
         const aiTokens = ref({input: 0, output: 0});
         const verificationStatus = ref('none');
         const debug = ref(false);
@@ -70,29 +91,51 @@ createApp({
 
         // For settings modal
         const showSettings = ref(false);
+        // TOC sidebar (open by default; toggled via divider triangle)
+        const tocOpen = ref(true);
         // API keys are never stored client-side; only presence flags are used.
         const activeAiProvider = ref(null);
         const aiProviderRegistry = ref([]);
         const isCodespace = ref(false);
         const hasGeminiKey = ref(false);
         const hasClaudeKey = ref(false);
+        const hasOpenaiKey = ref(false);
         const claudeViaBedrock = ref(false);
         const logEnabled = ref(false);
         const logviewEnabled = ref(false);
+        const printAllEnabled = ref(false);
+        // True when the server launched the UI as a chromeless window, which has
+        // no browser toolbar; the navbar then offers its own Refresh button.
+        const chromeless = ref(false);
 
         const availableAiProviders = computed(() => {
             const apiKeys = {
                 'gemini_api_key': hasGeminiKey.value,
                 'claude_api_key': hasClaudeKey.value,
+                'openai_api_key': hasOpenaiKey.value,
             };
-            return aiProviderRegistry.value.filter(p => !!apiKeys[p.key_setting]);
+            // A provider without key_setting (the local model) needs no key.
+            return aiProviderRegistry.value.filter(p => !p.key_setting || !!apiKeys[p.key_setting]);
         });
+
+        // The Settings modal's local model panel changed the provider list.
+        const onProvidersChanged = ({ ai_providers, active_ai_provider }) => {
+            aiProviderRegistry.value = ai_providers || [];
+            activeAiProvider.value = active_ai_provider;
+        };
 
         // For info modal
         const showInfo = ref(false);
 
         // For test help modal
         const showTestHelp = ref(false);
+        const showNewNotebook = ref(false);
+        // Shown in the new-plainbook dialog: where the new file will be created.
+        const newNotebookFolder = ref('');
+        // The same dialog serves the "+", copy and open buttons: 'new', 'copy'
+        // or 'open', with the name it opens prefilled with.
+        const notebookModalMode = ref('new');
+        const notebookModalDefaultName = ref('');
 
         // Test cell state
         const last_valid_test_cell_index = ref(-1);
@@ -100,8 +143,11 @@ createApp({
         // Configure global error handler
         const app = getCurrentInstance().appContext.app;
 
-        app.config.errorHandler = (err, instance, info) => {
-            console.error("Global error:", err, instance, info);
+        // Recovers from a failed operation: clears the run state and shows the
+        // error. Vue routes errors here only from promises a handler hands back
+        // (see onUnhandledRejection below), so any call site that floats a
+        // promise must call this itself.
+        const reportError = (err) => {
             running.value = false;
             runningActivity.value = { type: null, cellIndex: null };
 
@@ -117,7 +163,10 @@ createApp({
                 display += `\n\nCaused by: ${formatError(cause)}`;
             }
             console.log(display);
-            uiError.value = err.message || String(err);
+            // A dead server can surface under any number of wrapper messages
+            // ("Failed to fetch files", "Error in loading notebook", ...); say
+            // what actually went wrong instead.
+            uiError.value = isServerDown(err) ? SERVER_DOWN_MESSAGE : (err.message || String(err));
             // Scroll to the cell that caused the error, if known.
             // Skip in unit test mode — the cell index refers to the main
             // notebook, and scrollIntoView can shift the page up, moving
@@ -129,6 +178,31 @@ createApp({
                         cells[err.cellIndex].scrollIntoView({ behavior: 'smooth', block: 'center' });
                     }
                 });
+            }
+        };
+
+        app.config.errorHandler = (err, instance, info) => {
+            console.error("Global error:", err, instance, info);
+            reportError(err);
+        };
+
+        // Owns the running / runningActivity lifecycle for the ui_* entry points
+        // below. Everything that flips `running` on goes through here, so the
+        // flag cannot survive a throw: a cell that raises is reported by
+        // throwing (see runOneCell), and before this existed the reset was
+        // written out by hand after the await and was skipped on that path,
+        // leaving the navbar stuck on "Running cell N" with nothing to interrupt.
+        // Returns false when it declined because a run is already in flight, so
+        // callers can skip their follow-up steps; the body's error propagates.
+        const withRunning = async (fn) => {
+            if (running.value) return false;
+            running.value = true;
+            try {
+                await fn();
+                return true;
+            } finally {
+                running.value = false;
+                runningActivity.value = { type: null, cellIndex: null };
             }
         };
 
@@ -173,7 +247,7 @@ createApp({
             if (body) options.body = JSON.stringify(body);
 
             const separator = url.includes('?') ? '&' : '?';
-            const response = await fetch(`${url}${separator}token=${authToken}`, options);
+            const response = await serverFetch(`${url}${separator}token=${authToken}`, options);
             if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
 
             const r = await response.json();
@@ -293,13 +367,25 @@ createApp({
                 isUserStudy.value = r.is_user_study || false;
                 hasGeminiKey.value = r.has_gemini_key || false;
                 hasClaudeKey.value = r.has_claude_key || false;
+                hasOpenaiKey.value = r.has_openai_key || false;
                 claudeViaBedrock.value = r.claude_via_bedrock || false;
+                if (r.explanation_detail !== undefined) explanationDetail.value = r.explanation_detail;
+                explanationBullets.value = !!r.explanation_bullets;
+                explanationLatex.value = !!r.explanation_latex;
+                if (r.fix_error_amends_description !== undefined) {
+                    fixErrorAmendsDescription.value = !!r.fix_error_amends_description;
+                }
+                askQuestions.value = !!r.ask_questions;
+                if (r.skip_regeneration !== undefined) skipRegeneration.value = !!r.skip_regeneration;
                 logEnabled.value = !!r.log_enabled;
                 logviewEnabled.value = !!r.logview_enabled;
+                printAllEnabled.value = !!r.print_all_enabled;
+                chromeless.value = !!r.chromeless;
+                document.body.classList.toggle('print-all', printAllEnabled.value);
                 if (logviewEnabled.value) isLocked.value = true;
                 ActionLogger.init(r.log_enabled);
             } catch (err) {
-                error.value = err.message;
+                error.value = isServerDown(err) ? SERVER_DOWN_MESSAGE : err.message;
                 throw new Error("Error in loading notebook", { cause: err });
             } finally {
                 loading.value = false;
@@ -308,6 +394,10 @@ createApp({
         };
 
         const reloadNotebook = async () => {
+            // Refetching replaces notebook.value, which resets every cell's local
+            // editing state, so let any open editor save first.
+            flushActiveEdits();
+            await waitForPendingSaves();
             await fetchNotebook();
         }
 
@@ -485,6 +575,17 @@ createApp({
             }
         };
 
+        // Changing a cell's code invalidates any AI code explanation of it (the
+        // server drops it, keyed on the code hash); mirror that in memory so the
+        // rendered explanation / its tab disappear immediately.
+        const dropCodeExplanation = (cellIndex) => {
+            const c = notebook.value && notebook.value.cells[cellIndex];
+            if (!c) return;
+            delete c.metadata.ai_code_explanation;
+            delete c.metadata.ai_code_explanation_timestamp;
+            delete c.metadata.code_hash_for_code_explanation;
+        };
+
         const sendCodeToServer = async (content, cellIndex) => {
             asRead.value = false;
             const savePromise = (async () => {
@@ -495,9 +596,18 @@ createApp({
                         source: normalizedContent
                     });
                     if (notebook.value && notebook.value.cells[cellIndex]) {
+                        // Mirror the saved text into the cell, as the markdown
+                        // and explanation handlers do for their fields. CodeCell
+                        // renders its own localSource and never emits
+                        // update:source, so without this the cell we hold keeps
+                        // the pre-edit code. Later assignments (a regeneration)
+                        // would then be compared against a stale value, and an
+                        // update back to that value would look like no change at
+                        // all and never reach the screen.
                         notebook.value.cells[cellIndex].source = normalizedContent;
                         notebook.value.cells[cellIndex].outputs = [];
                         delete notebook.value.cells[cellIndex].metadata.validation;
+                        dropCodeExplanation(cellIndex);
                     }
                     console.log('Code saved:', cellIndex);
                 } catch (err) {
@@ -516,6 +626,7 @@ createApp({
                     notebook.value.cells[cellIndex].source = '';
                     notebook.value.cells[cellIndex].outputs = [];
                     delete notebook.value.cells[cellIndex].metadata.validation;
+                    dropCodeExplanation(cellIndex);
                 }
                 console.log('Code cleared:', cellIndex);
             } catch (err) {
@@ -563,12 +674,34 @@ createApp({
         };
 
         const ui_validateCode = async (cellIndex) => {
-            if (!running.value) {
-                running.value = true;
-                await validateCode(cellIndex);
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
+            await withRunning(() => validateCode(cellIndex));
+        };
+
+        const explainCode = async (cellIndex) => {
+            if (!activeAiProvider.value) {
+                throw new Error('No AI provider is active. Please set an API key in Settings.');
+            };
+            asRead.value = false;
+            const cell = notebook.value.cells[cellIndex];
+            runningActivity.value = { type: 'explaining', cellIndex, cellName: cell.metadata.name || null };
+            try {
+                const r = await apiCall('/explain_code', 'POST', { cell_index: cellIndex });
+                if (r.status === 'cancelled') {
+                    console.log('Explanation cancelled for cell:', cellIndex);
+                } else if (r.status === 'error') {
+                    throw new Error(r.message || 'Explanation failed');
+                } else if (notebook.value && notebook.value.cells[cellIndex]) {
+                    // Stored for the (later) display step; not rendered yet.
+                    notebook.value.cells[cellIndex].metadata.ai_code_explanation = r.explanation;
+                    console.log('Code explanation received for cell:', cellIndex);
+                }
+            } catch (err) {
+                throw new Error(err.message || 'Failed to explain code', { cause: err });
             }
+        };
+
+        const ui_explainCode = async (cellIndex) => {
+            await withRunning(() => explainCode(cellIndex));
         };
 
         const dismissValidation = async (cellIndex) => {
@@ -608,15 +741,7 @@ createApp({
         };
 
         const ui_validateUnitTestCode = async (cellIndex, testName, role) => {
-            if (!running.value) {
-                running.value = true;
-                try {
-                    await validateUnitTestCode(cellIndex, testName, role);
-                } finally {
-                    running.value = false;
-                    runningActivity.value = { type: null, cellIndex: null };
-                }
-            }
+            await withRunning(() => validateUnitTestCode(cellIndex, testName, role));
         };
 
         const dismissUnitTestValidation = async (cellIndex, testName, role) => {
@@ -730,12 +855,15 @@ createApp({
                 if (!running.value) return; // Stop if running has been cancelled
                 if (notebook.value.cells[i].cell_type !== 'code') continue; // Skip non-code cells
                 await generateCodeOneCell(i);
+                // The AI asked the user a question: stop rather than generate
+                // later cells on top of a cell whose code is not settled.
+                if (clarifyState.value[i]) return;
             }
         };
         
         
         // Function in charge of generating code for one cell.
-        const generateCodeOneCell = async (cellIndex, force = false, validationFeedback = null) => {
+        const generateCodeOneCell = async (cellIndex, force = false, validationFeedback = null, amend = false) => {
             const cell = notebook.value.cells[cellIndex];
             if (cell.cell_type !== 'code') return; // Only code cells
             if (!force && last_valid_code_cell_index.value >= cellIndex) return; // Already valid code
@@ -743,20 +871,60 @@ createApp({
             // Those outputs are needed as context for code generation.
             if (last_valid_output_cell_index.value < cellIndex - 1 && cellIndex > 0) {
                 await runCells(cellIndex - 1);
+                // An earlier cell is waiting on the user, and its outputs are
+                // context for this one: stop instead of generating without them.
+                if (clarificationPending(cellIndex - 1)) return;
             }
             if (!running.value) return; // Stop if running has been cancelled
             runningActivity.value = { type: 'generating', cellIndex, cellName: cell.metadata.name || null };
             asRead.value = false;
             const body = { cell_index: cellIndex };
+            // An explicit user action (Regenerate / Fix Code / module rewrite):
+            // tell the server to bypass its generation-skip, so the click always
+            // calls the AI instead of silently returning the existing source.
+            // The run-driven loop above leaves force false and keeps the skip.
+            if (force) {
+                body.force_regenerate = true;
+            }
             if (validationFeedback) {
                 body.validation_feedback = validationFeedback;
+            }
+            // "Fix Code" also asks the server to amend the description.
+            if (amend) {
+                body.amend_description = true;
             }
             const r = await apiCall('/generate_code', 'POST', body);
             if (r.status == 'success') {
                 if (notebook.value && notebook.value.cells[cellIndex]) {
-                    applyGeneratedCode(cellIndex, r.code);
+                    cell.source = r.code;
+                    // Regenerated code invalidates the old outputs; the server
+                    // clears them (plainbook.py generate_code_cell), so mirror
+                    // that here. This also drops any prior error output, so a
+                    // single "Fix Code" reverts the button to "Regenerate code".
+                    // Guarded on the state the response just applied: when the
+                    // server took the generation-skip fast path the code did not
+                    // change, so it keeps both the output and its validity, and
+                    // deleting it here would show an empty cell still labelled
+                    // up to date.
+                    if (last_valid_output_cell_index.value < cellIndex) {
+                        cell.outputs = [];
+                    }
+                    delete cell.metadata.validation;
+                    // A successful generation supersedes any pending questions.
+                    dismissClarify(cellIndex);
+                    // Regenerated code invalidates any AI code explanation of it.
+                    dropCodeExplanation(cellIndex);
+                    // The server amended the description (Fix Code only); reflect it.
+                    if (r.explanation) {
+                        cell.metadata.explanation = r.explanation;
+                    }
                     console.log('Code generated for cell:', cellIndex);
                 }
+            } else if (r.status == 'needs_clarification') {
+                // The AI asked questions; show them and leave the source as-is.
+                clarifyState.value = { ...clarifyState.value,
+                    [cellIndex]: { questions: r.questions || [] } };
+                console.log('Clarification requested for cell:', cellIndex, r.questions);
             } else if (r.status == 'cancelled') {
                 console.log('Code generation cancelled for cell:', cellIndex);
             } else {
@@ -766,26 +934,30 @@ createApp({
 
 
         // Executes cells up to the current cell.
-        const runCells = async (cellIndex) => {
+        const runCells = async (cellIndex, force = false) => {
             asRead.value = false;
             // If this cell's output is already valid (e.g. after a Run All),
             // clicking run on it should be a no-op — match the server-side
-            // caching condition in plainbook.py execute_cell.
-            if (cellIndex <= last_valid_output_cell_index.value) {
+            // caching condition in plainbook.py execute_cell. A forced run is
+            // exactly the case where the user wants it re-run anyway.
+            if (!force && cellIndex <= last_valid_output_cell_index.value) {
                 return;
             }
             // First, to execute this cell we need to have valid code for it.
             if (last_valid_code_cell_index.value < cellIndex) {
                 await generateCode(cellIndex);
+                // Code generation stopped to ask the user a question; do not
+                // execute anything until the question is answered.
+                if (clarificationPending(cellIndex)) return;
             }
             if (last_executed_cell_index.value === cellIndex) {
-                // We can be asked to rerun the same cell again. 
-                await runOneCell(cellIndex);
+                // We can be asked to rerun the same cell again.
+                await runOneCell(cellIndex, force);
             } else if (last_executed_cell_index.value > cellIndex) {
-                // Or, we may have executed further cells, and so be in need of a restart. 
+                // Or, we may have executed further cells, and so be in need of a restart.
                 // We need to run from the start up to cellIndex
                 await ui_resetKernel();
-                await runCells(cellIndex);
+                await runCells(cellIndex, force);
             } else {
                 // We run from the last run cell to the current one. 
                 for (let i = last_executed_cell_index.value + 1; i <= cellIndex; i++) {
@@ -793,43 +965,65 @@ createApp({
                     // If the code is not valid, generate it first.
                     if (last_valid_code_cell_index.value < i) {
                         await generateCode(i);
+                        if (clarificationPending(i)) return; // Waiting on the user
                     }
                     if (!running.value) return; // Stop if running has been cancelled
-                    // Runs this specific cell. 
-                    await runOneCell(i);
+                    // Runs this specific cell. Force applies only to the cell the
+                    // user asked for: the preceding ones may still be reconstructed
+                    // if nothing they depend on changed.
+                    await runOneCell(i, force && i === cellIndex);
                 }
             }
         };
 
 
         // Function in charge of running one cell in the notebook.
-        const runOneCell = async (cellIndex) => {
+        const runOneCell = async (cellIndex, force = false) => {
             if (cellIndex < 0 || cellIndex >= notebook.value.cells.length) return;
             const cell = notebook.value.cells[cellIndex];
             if (cell.cell_type !== 'code') return; // Only run code cells
             if (!running.value) return; // Stop if running has been cancelled
             runningActivity.value = { type: 'running', cellIndex, cellName: cell.metadata.name || null };
             asRead.value = false;
-            const r = await apiCall('/execute_cell', 'POST', { cell_index: cellIndex });
-                if (r.status === 'error') {
-                    throw new Error(r.message || 'Execution failed');
-                } 
-                cell.outputs = r.outputs;
-                console.log('Cell executed:', cellIndex, r.details);
-                if (r.details === 'CellExecutionError') {
-                    // The cell executed, but we have to stop other further
-                    // cells from executing.
-                    let err;
-                    if(r.outputs[0].ename === 'ModuleNotFoundError') {
-                        err = new Error('A package is required by this code cell. Please install the necessary packages via this command on your local environment: pip install ' + r.outputs[0].evalue.split("'")[1]);
-                    } else if (r.outputs[0].ename === 'FileNotFoundError') {
-                        err = new Error('The notebook cannot find a file it needs. Please select all the required input files using the selector at the top, so that the AI knows where to find them, and re-generate the code. If the files are already selected, you might want to refer to them in a more precise way, for instance citing their full name.');
-                    } else {
-                        err = new Error("Execution error: " + r.outputs[0].ename);
-                    }
-                    err.cellIndex = cellIndex;
-                    throw err;
+            const body = { cell_index: cellIndex };
+            // Force Run: re-execute even when the skip heuristic sees no change.
+            if (force) {
+                body.force_reexecute = true;
+            }
+            const r = await apiCall('/execute_cell', 'POST', body);
+            if (r.status === 'error') {
+                throw new Error(r.message || 'Execution failed');
+            }
+            cell.outputs = r.outputs;
+            console.log('Cell executed:', cellIndex, r.details);
+            // The user hit Stop while this request was in flight. The kernel
+            // reports its KeyboardInterrupt like any other cell error, so
+            // without this check the cancellation they asked for came back at
+            // them as "Execution error: KeyboardInterrupt" in the error bar.
+            // The traceback is left in the outputs above, which is where a
+            // cancelled cell should show it.
+            if (!running.value) return;
+            // Stop the run when the cell raised (CellExecutionError) or when
+            // its output contains a real failure on stderr (an uncaught
+            // traceback). A warning printed to stderr -- a pandas
+            // DtypeWarning, say -- does not stop the run and does not raise
+            // the app-level error bar: the cell ran. It still shows "Fix
+            // Code", which is driven by the wider outputsHaveError().
+            if (r.details === 'CellExecutionError' || outputsHaveStoppingError(r.outputs)) {
+                // Locate the actual error across all outputs (it may follow
+                // normal output), rather than assuming outputs[0].
+                const info = getErrorInfo(r.outputs) || {};
+                let err;
+                if (info.ename === 'ModuleNotFoundError') {
+                    err = new Error('The code uses the Python module ' + (info.evalue || '').split("'")[1] + ', which is not installed. Use the options shown in the cell output to install it or rewrite the code.');
+                } else if (info.ename === 'FileNotFoundError') {
+                    err = new Error('The notebook cannot find a file it needs. Please select all the required input files using the selector at the top, so that the AI knows where to find them, and re-generate the code. If the files are already selected, you might want to refer to them in a more precise way, for instance citing their full name.');
+                } else {
+                    err = new Error("Execution error: " + (info.ename || 'Error') + (info.evalue ? ': ' + info.evalue : ''));
                 }
+                err.cellIndex = cellIndex;
+                throw err;
+            }
         };
 
 
@@ -844,54 +1038,41 @@ createApp({
                     && notebook.value && notebook.value.cells[cellIndex]) {
                 notebook.value.cells[cellIndex].metadata.name = response.cell_name;
             }
-            if (!running.value) {
-                running.value = true;
+            const ran = await withRunning(async () => {
                 await generateCode(cellIndex);
                 await runCells(cellIndex);
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-                const total = notebook.value?.cells?.length ?? 0;
-                const next = Math.min(cellIndex + 1, total - 1);
-                if (next !== cellIndex) setActiveCell(next, true);
-            }
+            });
+            // Stay on the cell whose questions the user is answering.
+            if (!ran || clarificationPending(cellIndex)) return;
+            const total = notebook.value?.cells?.length ?? 0;
+            const next = Math.min(cellIndex + 1, total - 1);
+            if (next !== cellIndex) setActiveCell(next, true);
         };
 
         const ui_saveCodeAndRun = async (content, cellIndex) => {
             await sendCodeToServer(content, cellIndex);
-            if (!running.value) {
-                running.value = true;
-                await runCells(cellIndex);
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-                const total = notebook.value?.cells?.length ?? 0;
-                const next = Math.min(cellIndex + 1, total - 1);
-                if (next !== cellIndex) setActiveCell(next, true);
-            }
+            const ran = await withRunning(() => runCells(cellIndex));
+            // Stay on the cell whose questions the user is answering.
+            if (!ran || clarificationPending(cellIndex)) return;
+            const total = notebook.value?.cells?.length ?? 0;
+            const next = Math.min(cellIndex + 1, total - 1);
+            if (next !== cellIndex) setActiveCell(next, true);
         };
 
         const ui_saveCodeAndRunTest = async (content, cellIndex) => {
             await sendCodeToServer(content, cellIndex);
-            if (!running.value) {
-                running.value = true;
-                await runOneTest(cellIndex);
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-                const total = notebook.value?.cells?.length ?? 0;
-                const next = Math.min(cellIndex + 1, total - 1);
-                if (next !== cellIndex) setActiveCell(next, true);
-            }
+            const ran = await withRunning(() => runOneTest(cellIndex));
+            if (!ran) return;
+            const total = notebook.value?.cells?.length ?? 0;
+            const next = Math.min(cellIndex + 1, total - 1);
+            if (next !== cellIndex) setActiveCell(next, true);
         };
 
 
-        const ui_runCell = async (cellIndex) => {
+        const ui_runCell = async (cellIndex, force = false) => {
             flushActiveEdits();
             await waitForPendingSaves();
-            if (!running.value) {
-                running.value = true;
-                await runCells(cellIndex);
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-            }
+            await withRunning(() => runCells(cellIndex, force));
         };
 
 
@@ -899,13 +1080,10 @@ createApp({
             asRead.value = false;
             flushActiveEdits();
             await waitForPendingSaves();
-            if (!running.value) {
-                running.value = true;
+            await withRunning(async () => {
                 await ui_resetKernel();
                 await runCells(notebook.value.cells.length - 1);
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-            }
+            });
         };
 
 
@@ -918,8 +1096,7 @@ createApp({
             asRead.value = false;
             flushActiveEdits();
             await waitForPendingSaves();
-            running.value = true;
-            try {
+            await withRunning(async () => {
                 // Run the whole notebook first so variables and outputs are fresh.
                 await ui_resetKernel();
                 try {
@@ -944,10 +1121,7 @@ createApp({
                         notebook.value.metadata.verification = r.verification;
                     }
                 }
-            } finally {
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-            }
+            });
         };
 
 
@@ -963,12 +1137,11 @@ createApp({
         };
 
 
-        const ui_forceRegenerateCellCode = async (cellIndex) => {
+        const ui_forceRegenerateCellCode = async (cellIndex, amend = false) => {
             asRead.value = false;
             flushActiveEdits();
             await waitForPendingSaves();
-            if (!running.value) {
-                running.value = true;
+            await withRunning(async () => {
                 // Check for failed validation to pass as context
                 let validationFeedback = null;
                 const cell = notebook.value.cells[cellIndex];
@@ -977,12 +1150,156 @@ createApp({
                     validationFeedback = v.message;
                     dismissValidation(cellIndex);
                 }
-                await generateCodeOneCell(cellIndex, true, validationFeedback);
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-            }
+                // amend is true when triggered from the "Fix Code" button: also
+                // amend the description so a clean-slate regeneration avoids the error.
+                await generateCodeOneCell(cellIndex, true, validationFeedback, amend);
+                // "Fix Code" runs the cell as well, so the fix is verified and the
+                // output the regeneration discarded is replaced rather than left
+                // blank. Plain "Regenerate" from the code bar does not: it leaves a
+                // Stale cell for the user to run. Skipped when the AI asked a
+                // question (the code is not settled) or the run was interrupted.
+                if (amend && running.value && !clarificationPending(cellIndex)) {
+                    await runCells(cellIndex);
+                }
+            });
         };
 
+        const dismissClarify = (cellIndex) => {
+            if (!clarifyState.value[cellIndex]) return;
+            const next = { ...clarifyState.value };
+            delete next[cellIndex];
+            clarifyState.value = next;
+        };
+
+        // True when a cell at or before cellIndex is waiting on unanswered
+        // questions. Such a cell has no code the user approved, so the run must
+        // stop there instead of executing stale code or moving past it.
+        const clarificationPending = (cellIndex) =>
+            Object.keys(clarifyState.value).some((i) => Number(i) <= cellIndex);
+
+        // The answers are handed to the amend -> fold pipeline as guidance, so the
+        // AI rewrites the description to incorporate them. The question-and-answer
+        // text is prompt input only: it is never stored in the description, and the
+        // user reviews the rewritten description before it replaces the old one.
+        const ui_submitClarification = async (cellIndex, answers) => {
+            if (running.value) return;
+            const cs = clarifyState.value[cellIndex];
+            if (!cs) return;
+            const lines = cs.questions.map((q, i) => {
+                const a = (answers[i] || '').trim();
+                return a ? `Q: ${q}\nA: ${a}` : null;
+            }).filter(Boolean);
+            if (!lines.length) return;
+            dismissClarify(cellIndex);
+            await ui_amendAndFold(cellIndex,
+                'Answers to clarifying questions about this cell:\n' + lines.join('\n'));
+        };
+
+
+        // Folds awaiting review: foldState[index] = { status, original, proposed }.
+        const foldState = ref({});
+
+        const dismissFold = (cellIndex) => {
+            const next = { ...foldState.value };
+            delete next[cellIndex];
+            foldState.value = next;
+        };
+
+        // Nothing is stored until the user accepts the review.
+        const ui_amendAndFold = async (cellIndex, text) => {
+            if (!text || !text.trim() || running.value) return;
+            const cell = notebook.value?.cells?.[cellIndex];
+            flushActiveEdits();
+            await waitForPendingSaves();
+            await withRunning(async () => {
+                runningActivity.value = { type: 'folding', cellIndex,
+                    cellName: cell?.metadata?.name || null };
+                const r = await apiCall('/propose_amend', 'POST', {
+                    cell_index: cellIndex, text: text.trim() });
+                if (r.status !== 'success') throw new Error(r.message || 'Amend failed');
+                const original = Array.isArray(cell.metadata.explanation)
+                    ? cell.metadata.explanation.join('')
+                    : (cell.metadata.explanation || '');
+                foldState.value = { ...foldState.value,
+                    [cellIndex]: { status: 'review', original, proposed: r.proposed } };
+            });
+        };
+
+        // "Save": commit the amended description only (no regeneration/run). The
+        // code becomes stale until the cell is regenerated.
+        const ui_saveAmend = async (cellIndex, editedText) => {
+            if (running.value) return;
+            const r = await apiCall('/commit_amend', 'POST', {
+                cell_index: cellIndex, explanation: editedText });
+            if (r.status !== 'success') throw new Error(r.message || 'Commit failed');
+            const cell = notebook.value?.cells?.[cellIndex];
+            if (cell) {
+                cell.metadata.explanation = editedText;
+                // Marker so Unfold appears; the snapshot itself is server-side.
+                cell.metadata.explanation_prefold = { committed: true };
+            }
+            dismissFold(cellIndex);
+            asRead.value = false;
+        };
+
+        // "Save and Run": commit, then regenerate through the normal pipeline and
+        // run, so the stored code is always code this explanation produced.
+        const ui_acceptAmend = async (cellIndex, editedText) => {
+            if (running.value) return;
+            await ui_saveAmend(cellIndex, editedText);
+            await withRunning(async () => {
+                await generateCodeOneCell(cellIndex, true, null);
+                await runCells(cellIndex);
+            });
+        };
+
+        // Restores a pair that already ran together, so it needs no AI call.
+        const ui_unfold = async (cellIndex) => {
+            if (running.value) return;
+            const r = await apiCall('/unfold', 'POST', { cell_index: cellIndex });
+            if (r.status !== 'success') return;
+            const cell = notebook.value?.cells?.[cellIndex];
+            if (cell) {
+                cell.metadata.explanation = r.explanation;
+                delete cell.metadata.explanation_prefold;
+                if (r.source !== null) cell.source = r.source;
+            }
+            asRead.value = false;
+            await withRunning(async () => {
+                // A legacy snapshot carries no code, so it must be regenerated.
+                if (r.source === null) await generateCodeOneCell(cellIndex, true, null);
+                await runCells(cellIndex);
+            });
+        };
+
+        // Missing-module installation state, keyed by cell index:
+        // undefined | { status: 'installing' } | { status: 'done', success, output }.
+        // Displayed by the MissingModuleBar of the corresponding cell.
+        const moduleInstall = ref({});
+
+        const ui_installModule = async (cellIndex, moduleName) => {
+            await withRunning(async () => {
+                runningActivity.value = { type: 'installing', cellIndex, moduleName };
+                moduleInstall.value = { ...moduleInstall.value, [cellIndex]: { status: 'installing' } };
+                try {
+                    const r = await apiCall('/install_package', 'POST', { module: moduleName });
+                    if (r.status === 'error') throw new Error(r.message || 'Package installation failed');
+                    moduleInstall.value = { ...moduleInstall.value,
+                        [cellIndex]: { status: 'done', success: !!r.success, output: r.output || '' } };
+                    console.log('Package installed for module:', moduleName, 'success:', r.success);
+                } catch (err) {
+                    // Back to the question state; the error bar reports the failure.
+                    dismissModuleInstall(cellIndex);
+                    throw new Error('Failed to install package for module ' + moduleName, { cause: err });
+                }
+            });
+        };
+
+        const dismissModuleInstall = (cellIndex) => {
+            const next = { ...moduleInstall.value };
+            delete next[cellIndex];
+            moduleInstall.value = next;
+        };
 
         const ui_interruptKernel = async () => {
             try {
@@ -1074,42 +1391,48 @@ createApp({
             runningActivity.value = { type: 'running', cellIndex, cellName: cell.metadata.name || null };
             asRead.value = false;
             const r = await apiCall('/execute_test_cell', 'POST', { cell_index: cellIndex });
+            // Assigned before anything below can throw: a test that fails is
+            // exactly the case whose output the user needs to see, and leaving
+            // it unassigned left the cell showing the run before this one.
+            if (r.outputs) {
+                cell.outputs = r.outputs;
+            }
             if (r.status === 'error') {
                 const err = new Error(r.message || 'Test execution failed');
                 err.cellIndex = cellIndex;
                 throw err;
             }
-            if (r.outputs) {
-                cell.outputs = r.outputs;
+            console.log('Test cell executed:', cellIndex, r.details);
+            if (!running.value) return; // interrupted; see runOneCell
+            // A test cell that raised: report it the way a code cell is
+            // reported, with the error type the server sent rather than a
+            // flattened message.
+            if (r.details === 'CellExecutionError' || outputsHaveStoppingError(r.outputs)) {
+                const info = getErrorInfo(r.outputs) || {};
+                const err = new Error("Test failed: " + (info.ename || 'Error')
+                    + (info.evalue ? ': ' + info.evalue : ''));
+                err.cellIndex = cellIndex;
+                throw err;
             }
-            console.log('Test cell executed:', cellIndex);
         };
 
         const ui_runTestCell = async (cellIndex) => {
             flushActiveEdits();
             await waitForPendingSaves();
-            if (!running.value) {
-                running.value = true;
-                await runOneTest(cellIndex);
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-            }
+            await withRunning(() => runOneTest(cellIndex));
         };
 
         const ui_runAllTests = async () => {
             flushActiveEdits();
             await waitForPendingSaves();
-            if (!running.value) {
-                running.value = true;
+            await withRunning(async () => {
                 for (let i = 0; i < notebook.value.cells.length; i++) {
                     if (!running.value) break;
                     if (notebook.value.cells[i].cell_type === 'test') {
                         await runOneTest(i);
                     }
                 }
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-            }
+            });
         };
 
         const ui_saveExplanationAndRunTest = async (content, cellIndex) => {
@@ -1118,24 +1441,21 @@ createApp({
                     && notebook.value && notebook.value.cells[cellIndex]) {
                 notebook.value.cells[cellIndex].metadata.name = response.cell_name;
             }
-            if (!running.value) {
-                running.value = true;
+            const ran = await withRunning(async () => {
                 await generateTestCodeOneCell(cellIndex);
                 await runOneTest(cellIndex);
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-                const total = notebook.value?.cells?.length ?? 0;
-                const next = Math.min(cellIndex + 1, total - 1);
-                if (next !== cellIndex) setActiveCell(next, true);
-            }
+            });
+            if (!ran) return;
+            const total = notebook.value?.cells?.length ?? 0;
+            const next = Math.min(cellIndex + 1, total - 1);
+            if (next !== cellIndex) setActiveCell(next, true);
         };
 
         const ui_forceRegenerateTestCode = async (cellIndex) => {
             asRead.value = false;
             flushActiveEdits();
             await waitForPendingSaves();
-            if (!running.value) {
-                running.value = true;
+            await withRunning(async () => {
                 let validationFeedback = null;
                 const cell = notebook.value.cells[cellIndex];
                 const v = cell?.metadata?.validation;
@@ -1144,9 +1464,7 @@ createApp({
                     dismissValidation(cellIndex);
                 }
                 await generateTestCodeOneCell(cellIndex, true, validationFeedback);
-                running.value = false;
-                runningActivity.value = { type: null, cellIndex: null };
-            }
+            });
         };
 
         // Unit test mode state and methods
@@ -1278,6 +1596,11 @@ createApp({
                         role: role,
                         source: content
                     });
+                    // Keep the sub-cell we hold in step with what was saved, for
+                    // the same reason as sendCodeToServer above.
+                    const subCell = notebook.value?.cells[cellIndex]
+                        ?.metadata?.unit_tests?.[testName]?.cells?.[role];
+                    if (subCell) subCell.source = content;
                 } catch (err) {
                     throw new Error('Failed to save unit test code', { cause: err });
                 }
@@ -1444,49 +1767,27 @@ createApp({
         const ui_runUnitTest = async (cellIndex, testName) => {
             flushActiveEdits();
             await waitForPendingSaves();
-            if (!running.value) {
-                running.value = true;
-                try {
-                    await executeUnitTest(cellIndex, testName);
-                } finally {
-                    running.value = false;
-                    runningActivity.value = { type: null, cellIndex: null };
-                }
-            }
+            await withRunning(() => executeUnitTest(cellIndex, testName));
         };
 
         const ui_runUnitTestSubcell = async (cellIndex, testName, role) => {
             flushActiveEdits();
             await waitForPendingSaves();
-            if (!running.value) {
-                running.value = true;
-                try {
-                    await ensureUnitTestPrereqs(cellIndex);
-                    if (!running.value) return;
-                    if (role === 'setup') {
-                        await runUnitTestSetup(cellIndex, testName);
-                    } else if (role === 'target') {
-                        await runUnitTestTarget(cellIndex, testName);
-                    } else if (role === 'test') {
-                        await runUnitTestTest(cellIndex, testName);
-                    }
-                } finally {
-                    running.value = false;
-                    runningActivity.value = { type: null, cellIndex: null };
+            await withRunning(async () => {
+                await ensureUnitTestPrereqs(cellIndex);
+                if (!running.value) return;
+                if (role === 'setup') {
+                    await runUnitTestSetup(cellIndex, testName);
+                } else if (role === 'target') {
+                    await runUnitTestTarget(cellIndex, testName);
+                } else if (role === 'test') {
+                    await runUnitTestTest(cellIndex, testName);
                 }
-            }
+            });
         };
 
         const generateUnitTestCode = async (cellIndex, testName, role) => {
-            if (!running.value) {
-                running.value = true;
-                try {
-                    await generateUnitTestCodeInner(cellIndex, testName, role);
-                } finally {
-                    running.value = false;
-                    runningActivity.value = { type: null, cellIndex: null };
-                }
-            }
+            await withRunning(() => generateUnitTestCodeInner(cellIndex, testName, role));
         };
 
         const handleKeydown = (e) => {
@@ -1505,20 +1806,26 @@ createApp({
 
             if (e.key === 'Enter' && e.shiftKey) {
                 if (isEditingField(e.target)) return;
-                if (!notebook.value || activeIndex.value < 0) return;
-                e.preventDefault();
+                if (!notebook.value) return;
                 if (unitTestTargetIndex.value !== null) {
                     // Unit test mode: run the active sub-cell and advance.
+                    // Note: activeIndex is unrelated here — the open-unit-test
+                    // button uses @click.stop, so entering unit-test mode does
+                    // not necessarily set activeIndex. Drive off the unit-test
+                    // state instead.
                     const testName = unitTestActiveTestName.value;
-                    if (testName) {
-                        ui_runUnitTestSubcell(unitTestTargetIndex.value, testName, unitTestActiveSubcell.value);
-                        if (unitTestActiveSubcell.value === 'setup') unitTestActiveSubcell.value = 'target';
-                        else if (unitTestActiveSubcell.value === 'target') unitTestActiveSubcell.value = 'test';
-                    }
+                    if (!testName) return;
+                    e.preventDefault();
+                    ui_runUnitTestSubcell(unitTestTargetIndex.value, testName, unitTestActiveSubcell.value)
+                        .catch(reportError);
+                    if (unitTestActiveSubcell.value === 'setup') unitTestActiveSubcell.value = 'target';
+                    else if (unitTestActiveSubcell.value === 'target') unitTestActiveSubcell.value = 'test';
                 } else {
+                    if (activeIndex.value < 0) return;
+                    e.preventDefault();
                     const cell = notebook.value.cells[activeIndex.value];
                     if (cell && (cell.cell_type === 'code' || cell.cell_type === 'test')) {
-                        ui_runCell(activeIndex.value);
+                        ui_runCell(activeIndex.value).catch(reportError);
                     }
                     const next = Math.min(activeIndex.value + 1, total - 1);
                     if (next !== activeIndex.value) setActiveCell(next);
@@ -1532,6 +1839,7 @@ createApp({
                 const r = await apiCall('/set_key', 'POST', {
                     gemini_api_key: keys.gemini_api_key,
                     claude_api_key: keys.claude_api_key,
+                    openai_api_key: keys.openai_api_key,
                 });
                 console.log('API keys saved successfully');
                 if (r.active_ai_provider !== undefined) {
@@ -1544,11 +1852,62 @@ createApp({
                 if (r.has_claude_key !== undefined) {
                     hasClaudeKey.value = r.has_claude_key;
                 }
+                if (r.has_openai_key !== undefined) {
+                    hasOpenaiKey.value = r.has_openai_key;
+                }
                 if (r.claude_via_bedrock !== undefined) {
                     claudeViaBedrock.value = r.claude_via_bedrock;
                 }
+                // The server rebuilds the model list from the new keys.
+                if (r.ai_providers !== undefined) {
+                    aiProviderRegistry.value = r.ai_providers;
+                }
             } catch (err) {
                 throw new Error('Error saving API keys', { cause: err });
+            }
+            // Save the code-generation settings (independent of API keys).
+            if (keys.ask_questions !== undefined) {
+                try {
+                    const r = await apiCall('/set_ask_questions', 'POST', { value: keys.ask_questions });
+                    if (r.ask_questions !== undefined) askQuestions.value = r.ask_questions;
+                } catch (err) {
+                    throw new Error('Error saving code generation setting', { cause: err });
+                }
+            }
+            if (keys.skip_regeneration !== undefined) {
+                try {
+                    const r = await apiCall('/set_skip_regeneration', 'POST', { value: keys.skip_regeneration });
+                    if (r.skip_regeneration !== undefined) skipRegeneration.value = r.skip_regeneration;
+                } catch (err) {
+                    throw new Error('Error saving the regeneration setting', { cause: err });
+                }
+            }
+            // Save the global "Explain code" options.
+            if (keys.explanation_detail !== undefined) {
+                try {
+                    const r = await apiCall('/set_explain_options', 'POST', {
+                        detail: keys.explanation_detail,
+                        bullets: keys.explanation_bullets,
+                        latex: keys.explanation_latex,
+                    });
+                    if (r.explanation_detail !== undefined) explanationDetail.value = r.explanation_detail;
+                    if (r.explanation_bullets !== undefined) explanationBullets.value = r.explanation_bullets;
+                    if (r.explanation_latex !== undefined) explanationLatex.value = r.explanation_latex;
+                } catch (err) {
+                    throw new Error('Error saving explanation options', { cause: err });
+                }
+            }
+            // Save the "Fix errors also amends the description" setting.
+            if (keys.fix_error_amends_description !== undefined) {
+                try {
+                    const r = await apiCall('/set_fix_error_amends_description', 'POST',
+                        { value: keys.fix_error_amends_description });
+                    if (r.fix_error_amends_description !== undefined) {
+                        fixErrorAmendsDescription.value = r.fix_error_amends_description;
+                    }
+                } catch (err) {
+                    throw new Error('Error saving the description-amendment setting', { cause: err });
+                }
             }
         };
 
@@ -1573,6 +1932,77 @@ createApp({
             uiError.value = null;
         };
 
+        // Rename the notebook: the server saves a copy under the new name and
+        // switches all future saves to it. On success the @stateful response
+        // carries the new name, which updateState() applies to notebook_name.
+        const renameNotebook = async (newName) => {
+            if (!newName) return;
+            try {
+                const r = await apiCall('/rename_notebook', 'POST', { name: newName });
+                if (r.status === 'error') {
+                    uiError.value = r.message || 'Could not rename the notebook.';
+                }
+            } catch (err) {
+                uiError.value = (err && err.message) || 'Could not rename the notebook.';
+            }
+        };
+
+        // Open the plainbook dialog in the given mode, showing where the file
+        // will land. The folder is only for the help line, so a failure to get
+        // it does not stop the dialog.
+        const openNotebookDialog = async (mode, defaultName) => {
+            notebookModalMode.value = mode;
+            notebookModalDefaultName.value = defaultName;
+            newNotebookFolder.value = '';
+            showNewNotebook.value = true;
+            try {
+                const r = await apiCall('/current_dir');
+                newNotebookFolder.value = r.path || '';
+            } catch (err) {
+                console.warn('Could not determine the notebook folder:', err);
+            }
+        };
+
+        const openNewNotebook = () => openNotebookDialog('new', '');
+
+        // Opening picks a file rather than naming one, so there is no name to
+        // suggest.
+        const openExistingNotebook = () => openNotebookDialog('open', '');
+
+        // Copying suggests <name>_copy; the dialog preselects it, so typing
+        // replaces it.
+        const openCopyNotebook = () =>
+            openNotebookDialog('copy', (notebook_name.value || 'notebook') + '_copy');
+
+        // Create a new plainbook, copy this one, or open an existing one. In
+        // every case the server launches it as its own process, so it appears
+        // in a new window with its own kernel; nothing changes here.
+        //
+        // `path` is set when the dialog knows it is dealing with a file that
+        // already exists -- an explicit pick in open mode, or a name in new
+        // mode that turned out to be taken -- and then the request is an open,
+        // whichever button was pressed.
+        const submitNotebookDialog = async ({ mode, name, folder, path }) => {
+            const isCopy = mode === 'copy';
+            const isOpen = mode === 'open' || !!path;
+            const failure = isOpen ? 'Could not open the plainbook.'
+                : isCopy ? 'Could not copy the plainbook.'
+                    : 'Could not create the new plainbook.';
+            if (isOpen ? !path : !name) return;
+            showNewNotebook.value = false;
+            const [route, body] = isOpen ? ['/open_notebook', { path }]
+                : isCopy ? ['/copy_notebook', { name, folder }]
+                    : ['/new_notebook', { name, folder }];
+            try {
+                const r = await apiCall(route, 'POST', body);
+                if (r.status === 'error') {
+                    uiError.value = r.message || failure;
+                }
+            } catch (err) {
+                uiError.value = (err && err.message) || failure;
+            }
+        };
+
         const handleClickOutside = (event) => {
             if (event.target.closest('.modal')) return;
             const container = document.querySelector('.notebook-container');
@@ -1583,30 +2013,84 @@ createApp({
             }
         };
 
+        // Changing the input files (Files tab) can mark all cells stale on the
+        // server; InputFile.js dispatches the fresh state so we can update.
+        const onFilesChanged = (e) => {
+            if (e.detail) updateState(e.detail);
+        };
+
+        // Not every caller awaits the promise it starts: a click handler may fire
+        // a fetch and return, and Vue only routes errors from promises a handler
+        // hands back. Such a rejection reaches neither app.config.errorHandler
+        // nor any catch, so before this recovered the run state a stray could
+        // leave `running` true and the navbar stuck on "Running cell N". Catch
+        // the strays here instead of auditing every call site forever. The
+        // background pollers (sendPing, ActionLogger) carry their own .catch, so
+        // a dropped heartbeat still does not reach the error bar. Left
+        // un-prevented so the rejection still reaches the console.
+        const onUnhandledRejection = (e) => {
+            const reason = e.reason;
+            reportError(reason instanceof Error ? reason : new Error(String(reason)));
+        };
+
+        // ── Telling the server we are still here ──
+        // Each Plainbook window owns a server and a kernel, so the server exits
+        // when its window goes away. Two signals, because neither suffices:
+        //   - pagehide + sendBeacon: the prompt one. sendBeacon is the only send
+        //     that reliably survives page teardown (a fetch here is cancelled).
+        //     The server only *schedules* the exit, because a reload fires
+        //     pagehide too and the reloaded page's first request cancels it.
+        //   - the ping below: the safety net, for a dropped beacon or a browser
+        //     that was killed. The server's idle limit is minutes, not seconds,
+        //     because browsers throttle timers in hidden tabs to about 1/minute.
+        const PING_INTERVAL_MS = 30000;
+        let pingTimer = null;
+        const sendPing = () => {
+            // Bypass apiCall: a failed heartbeat is not worth an error banner.
+            serverFetch(`/ping?token=${authToken}`).catch(() => {});
+        };
+        const onPageHide = () => {
+            navigator.sendBeacon(`/shutdown?token=${authToken}`);
+        };
+
         onMounted(() => {
             fetchNotebook();
             window.addEventListener('keydown', handleKeydown);
             window.addEventListener('click', handleClickOutside);
+            window.addEventListener('plainbook:files-changed', onFilesChanged);
+            window.addEventListener('unhandledrejection', onUnhandledRejection);
+            window.addEventListener('pagehide', onPageHide);
+            pingTimer = setInterval(sendPing, PING_INTERVAL_MS);
         });
 
         onBeforeUnmount(() => {
             window.removeEventListener('keydown', handleKeydown);
             window.removeEventListener('click', handleClickOutside);
+            window.removeEventListener('plainbook:files-changed', onFilesChanged);
+            window.removeEventListener('unhandledrejection', onUnhandledRejection);
+            window.removeEventListener('pagehide', onPageHide);
+            if (pingTimer) clearInterval(pingTimer);
         });
 
-        return { notebook, notebook_name, loading, error, isLocked, lockNotebook, shareOutputWithAi, aiTokens, verificationStatus, toggleShareOutput,
+        return { notebook, notebook_name, loading, error, isLocked, lockNotebook, shareOutputWithAi, skipRegeneration, explanationDetail, explanationBullets, explanationLatex, fixErrorAmendsDescription, aiTokens, verificationStatus, toggleShareOutput,
+            askQuestions, clarifyState, dismissClarify, ui_submitClarification,
             sendExplanationToServer, authToken,
             sendCodeToServer, clearCellCode, ui_saveExplanationAndRun, ui_saveCodeAndRun,
             sendMarkdownToServer, generateCode, activeIndex, reloadNotebook, downloadIpynb,
-            validateCode, ui_validateCode, dismissValidation, ui_verifyNotebook, dismissVerification, ui_resetAndRunAllCells, ui_forceRegenerateCellCode,
+            validateCode, ui_validateCode, explainCode, ui_explainCode, dismissValidation, ui_verifyNotebook, dismissVerification, ui_resetAndRunAllCells, ui_forceRegenerateCellCode,
             setActiveCell, ui_runCell, running, runningActivity, asRead,
             ui_interruptKernel, insertCell, markdownEditKey,
+            foldState, ui_amendAndFold, ui_acceptAmend, ui_saveAmend, dismissFold, ui_unfold,
+            moduleInstall, ui_installModule, dismissModuleInstall,
             last_executed_cell_index, last_valid_code_cell_index, last_valid_output_cell_index,
             last_valid_test_cell_index,
             saveSettings, showSettings, showInfo, showTestHelp,
-            genError, uiError, closeUiError, debug, sendDebugRequest, resetTokens,
+            showNewNotebook, newNotebookFolder, notebookModalMode, notebookModalDefaultName,
+            openNewNotebook, openCopyNotebook, openExistingNotebook, submitNotebookDialog,
+            tocOpen,
+            genError, uiError, closeUiError, renameNotebook, debug, sendDebugRequest, resetTokens,
             explanationEditKey, deleteCell, moveCell,
-            clearOutputs, activeAiProvider, availableAiProviders, setActiveAiProvider, isCodespace, isUserStudy, hasGeminiKey, hasClaudeKey, claudeViaBedrock, logEnabled, logviewEnabled,
+            clearOutputs, activeAiProvider, availableAiProviders, setActiveAiProvider, onProvidersChanged, isCodespace, isUserStudy, hasGeminiKey, hasClaudeKey, hasOpenaiKey, claudeViaBedrock, logEnabled, logviewEnabled, printAllEnabled, chromeless, authToken,
             submitting, submitStudy, lastSubmittedAtLabel,
             restarting, ui_restart,
             ui_runTestCell, ui_runAllTests, ui_saveExplanationAndRunTest, ui_saveCodeAndRunTest, ui_forceRegenerateTestCode,
@@ -1618,4 +2102,6 @@ createApp({
     },
 
 template: `#app-template`,
-}).mount('#app');
+});
+app.directive('mathjax', mathjaxDirective);
+app.mount('#app');

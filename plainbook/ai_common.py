@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 import re
@@ -22,6 +23,45 @@ that are present after executing those cells.
 Return ONLY the code, no markdown formatting or explanations.
 To display Pandas dataframes, you can simply return the dataframe variable name,
 and the notebook will render it appropriately.
+"""
+
+# Marks a response that asks questions instead of returning code.
+CLARIFY_SENTINEL = "NEEDS_CLARIFICATION"
+
+# Appended to SYSTEM_INSTRUCTIONS when the notebook allows asking questions.
+# You decide which of the two responses to give; the notebook handles both.
+CLARIFY_INSTRUCTIONS = f"""
+
+You may give one of TWO responses, and it is up to you to choose which:
+
+1. THE CODE. If you know what the cell should do, just write the code, as
+   described above. This is the normal case, and what you should do whenever the
+   instructions and the context leave you without real doubts.
+
+2. QUESTIONS. If the instructions are genuinely ambiguous, so that a wrong guess
+   would produce the wrong result, ask the user instead of guessing.
+
+Choose questions only for doubts that actually change the code you would write.
+In particular, do NOT ask about:
+- Anything the context already answers. The preceding code, FILE CONTEXT, and
+  VARIABLE CONTEXT are available to you; if they settle the point, use them.
+- Anything the user has already addressed. Answers to earlier questions are
+  folded into the instructions, so if the instructions give you enough to
+  proceed, you MUST NOT ask again.
+- Refinements you can reasonably decide yourself, such as variable naming,
+  formatting, or the choice among equivalent implementations.
+
+To ask questions, respond with EXACTLY this format and NOTHING else (no
+preamble, no explanations, no code):
+{CLARIFY_SENTINEL}
+- <your first question>
+- <your second question>
+
+Rules for questions:
+- One question per line, each line starting with "- ".
+- Ask at most 3 questions.
+- Make each question specific and easy to answer (offer the likely options when
+  you can).
 """
 
 TEST_SYSTEM_INSTRUCTIONS = """
@@ -66,6 +106,29 @@ NAME_GENERATION_INSTRUCTIONS = """You need to summarize what a notebook cell doe
 You will be given the cell's explanation, which describes what the cell does.
 Please return at least 2 words, and at most 3. Return only these words."""
 
+AMEND_EXPLANATION_INSTRUCTIONS = """You maintain the plain-language description of a Jupyter notebook cell.
+In this notebook, each cell's Python code is generated automatically from its description.
+
+The code generated for one cell raised an error, and the code has just been corrected.
+Revise that cell's description so that, if code were regenerated from scratch using only
+the revised description and the surrounding notebook, it would avoid the error that was
+just fixed.
+
+Rules:
+- Preserve the original intent, scope, wording style, and level of detail.
+- Make the SMALLEST change necessary to prevent the error from recurring -- for example a
+  required dependency or import, an edge case to handle, an assumption about a column, type,
+  or format, an order of operations, or a correction of a factual mistake in the original wording.
+- Describe WHAT the cell should do, in plain language, not HOW to write the Python. Do not
+  paste code, function names, or snippets into the description unless the original description
+  already referred to them.
+- Do not mention the error, the fix, or that anything was changed. The result must read as a
+  clean, standalone description.
+- Keep it concise. If the original description already implies the corrected behavior, return
+  it essentially unchanged.
+
+Return ONLY the revised description text, with no markdown fences, headings, quotes, or commentary."""
+
 CHECKING_INSTRUCTIONS = """
 You are an assistant that validates Python code for Jupyter cells.
 Your task is to check whether a Jupyter notebook cell does what it specified in its instructions.
@@ -80,6 +143,37 @@ followed by a brief explanation.
 
 VALIDATION_FEEDBACK_PREAMBLE = """The previous code for this cell does not seem to be correct.
 Here are comments on it given by an AI model:"""
+
+EXPLAIN_INSTRUCTIONS = """
+You are an assistant that explains Python code in natural language.
+Your task is to explain every part of the code provided to you.
+The explanation should be aimed at someone who is knowledgeable on the subject matter
+(e.g., data science, machine learning) but does not know the syntax of Python or how to code.
+The explanation should be clear, concise, and sufficient for a domain expert to understand
+the logic and implementation details without needing to read the code themselves.
+Do not include markdown code fences in your response, just the natural language explanation.
+"""
+
+# Defaults for the "Explain code" options — the single source of truth. Referenced
+# by the /explain_code and /set_explain_options endpoints (main.py) and by the
+# explain-code functions/method (gemini.py, claude.py, plainbook.py). Change here only.
+DEFAULT_EXPLANATION_DETAIL_LEVEL = 1   # 1 Brief .. 4 Expert
+DEFAULT_EXPLANATION_USE_BULLETS = False
+DEFAULT_EXPLANATION_USE_LATEX = False
+
+# Whether the AI may reply to an action cell with questions instead of code.
+DEFAULT_ASK_QUESTIONS = False
+
+# Whether a cell whose description and inputs are unchanged may be left alone
+# instead of being regenerated. Off: every generation request calls the AI.
+DEFAULT_SKIP_REGENERATION = True
+
+# Whether "Fix Code" also rewrites the cell's description, so that regenerating
+# from scratch would avoid the error just fixed. Turned off, fixing an error
+# changes the code only, the description the user wrote stands, and the separate
+# amend_explanation AI call is not made at all. Read via the settings file in
+# main.py; this is the fallback when nothing has been saved.
+DEFAULT_FIX_ERROR_AMENDS_DESCRIPTION = True
 
 NOTEBOOK_VERIFY_INSTRUCTIONS = """
 You are auditing a Jupyter notebook on behalf of a user who needs assurance that the
@@ -155,6 +249,60 @@ def build_name_prompt(explanation):
 {explanation}
 
 Summarize what this cell does in 2-3 words:"""
+
+
+def build_amend_explanation_prompt(explanation, error_context, previous_code, new_code):
+    """Builds the prompt for amending a cell's description after its code was fixed."""
+    error_context = truncate_to_token_limit(error_context)
+    previous_code = truncate_to_token_limit(previous_code)
+    new_code = truncate_to_token_limit(new_code)
+    return f"""Original description of the cell:
+{explanation}
+
+When code was generated from that description and run, it produced this error:
+{error_context}
+
+The code that produced the error:
+{previous_code}
+
+The corrected code, which now runs without the error:
+{new_code}
+
+Revise the original description, following the rules, so that regenerating code from it
+would avoid this error. Return only the revised description:"""
+
+
+FOLD_SYSTEM_INSTRUCTIONS = """
+You are consolidating the plain-language description of a single notebook cell.
+You are given an ORIGINAL description, followed by a list of ADDITIONAL GUIDANCE
+items that were appended incrementally to refine what the cell should do.
+
+Rewrite the ORIGINAL description so that it fully incorporates every item of
+ADDITIONAL GUIDANCE, as if the whole thing had been written that way from the
+start. The result must read as one coherent, natural description authored by a
+single person for another reader.
+
+Rules:
+- Do NOT add, remove, or infer any behavior beyond what is stated in the
+  original description and the guidance items.
+- Where a guidance item conflicts with the original (or with an earlier
+  guidance item), the LATER instruction wins; drop the superseded wording.
+- Preserve the original voice and level of detail. Do not add commentary,
+  headings, preambles, or explanations of your changes.
+- Return ONLY the rewritten description text, nothing else.
+"""
+
+
+def build_fold_prompt(explanation, additions):
+    """Builds the prompt to fold `additions` (oldest first) into the explanation."""
+    guidance = "\n".join(f"- {a}" for a in additions)
+    return f"""ORIGINAL description:
+{explanation}
+
+ADDITIONAL GUIDANCE (in the order it was added, oldest first; later items win on conflict):
+{guidance}
+
+Rewritten description:"""
 
 
 # Session-level token accumulator
@@ -422,15 +570,88 @@ def strip_markdown_code_fences(code):
     return code
 
 
+def _extract_questions(text):
+    """Returns the questions in a clarification response, or None if it is not one."""
+    lines = (text or "").strip().splitlines()
+    # Scan all lines: the sentinel is sometimes preceded by a preamble.
+    sentinel_idx = None
+    for i, line in enumerate(lines):
+        if line.strip().upper().startswith(CLARIFY_SENTINEL):
+            sentinel_idx = i
+            break
+    if sentinel_idx is None:
+        return None
+    questions = []
+    for line in lines[sentinel_idx + 1:]:
+        line = line.strip()
+        if not line:
+            continue
+        line = re.sub(r'^([-*•]|\d+[.)])\s*', '', line).strip()
+        if line:
+            questions.append(line)
+    return questions or ["Could you provide more detail about what this cell should do?"]
+
+
+def parse_generate_response(text):
+    """Parse a generation response into (code, None), or (None, questions) if it
+    asked for clarification."""
+    questions = _extract_questions(text)
+    if questions is not None:
+        return None, questions
+
+    code = strip_markdown_code_fences(text)
+    # A non-code reply would be a SyntaxError on run; surface it as a question.
+    try:
+        ast.parse(code)
+    except SyntaxError:
+        msg = code.strip()
+        if msg:
+            return None, [msg]
+    return code, None
+
+
+# The verdict is asked for as a bare YES or NO at the start of the reply, but
+# models dress it up: Claude has been seen to answer "**YES**", and a heading, a
+# block quote, a list marker, surrounding quotes or a tick are all just as
+# likely. Rather than enumerate the decorations, skip everything at the front
+# that is not a letter and read the letters that follow: if they spell YES or NO
+# and a letter does not continue them, that is the verdict. A plain
+# startswith("YES") saw none of this and fell through to the "no verdict"
+# branch, which reports the cell as invalid -- so a model saying YES was shown
+# to the user in a red bar.
+# Matched, rather than searched, on purpose: a YES or NO further into the text is
+# prose, not a verdict, and "there is no error" would read as a rejection.
+# The trailing guard is a lookahead for a letter rather than \b, because \b
+# treats the underscore of "__YES__" as a word character and so would not fire
+# there. Either way it stops "NOTE:" and "Nothing is wrong" matching NO, which
+# the old startswith("NO") did not: both were read as rejections.
+VALIDATION_VERDICT_PATTERN = re.compile(
+    r"""^[^A-Za-z]*              # whatever precedes the verdict: ** ## > - " ` ( space
+        (?P<verdict>YES|NO)      # the verdict, in any case...
+        (?![A-Za-z])             # ...not merely the start of NOTE or YESTERDAY
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
 def parse_validation_response(text):
-    """Parse a YES/NO validation response into a result dict."""
-    r = text.strip()
-    if r.upper().startswith("YES"):
-        return dict(is_valid=True, message=clean_start(r[3:]))
-    elif r.upper().startswith("NO"):
-        return dict(is_valid=False, message=clean_start(r[2:]))
-    else:
-        return dict(is_valid=False, message=r)
+    """Parse a YES/NO validation response into a result dict.
+
+    The verdict decides is_valid but is left in the message: the user should see
+    what the model actually said, and the pattern only has to recognise the
+    verdict, not excise it. (Removing it was fiddly as well as unwanted -- it
+    meant deciding whether a dash after the verdict was a separator or the first
+    bullet of the explanation.)"""
+    r = (text or "").strip()
+    match = VALIDATION_VERDICT_PATTERN.match(r)
+    if match:
+        return dict(is_valid=match.group("verdict").upper() == "YES", message=r)
+    # No verdict to be found. Fail closed -- an unreviewed cell must not look
+    # approved -- but say why, because the reply itself may read as approval and
+    # a bare red bar over approving text is baffling.
+    return dict(is_valid=False,
+                message="The AI did not begin its answer with YES or NO, so its "
+                        "verdict could not be read. Its reply follows.\n\n" + r)
 
 
 def parse_verify_response(text):

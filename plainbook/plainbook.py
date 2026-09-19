@@ -17,16 +17,82 @@ import machineid
 import nbformat
 import requests
 
-from .ai_common import get_session_tokens
-from .gemini import gemini_generate_code, gemini_validate_code, gemini_generate_cell_name, gemini_generate_test_code, gemini_generate_unit_test_code, gemini_verify_notebook, gemini_verify_tests
-from .claude import claude_generate_code, claude_validate_code, claude_generate_cell_name, claude_generate_test_code, claude_generate_unit_test_code, claude_verify_notebook, claude_verify_tests
+from .ai_common import (get_session_tokens, DEFAULT_EXPLANATION_DETAIL_LEVEL,
+                        DEFAULT_EXPLANATION_USE_BULLETS, DEFAULT_EXPLANATION_USE_LATEX)
+from .utilities import PIP_INSTALL_CODE, parse_pip_install_result, resolve_package_name
+from .gemini import gemini_generate_code, gemini_validate_code, gemini_explain_code, gemini_generate_cell_name, gemini_generate_test_code, gemini_generate_unit_test_code, gemini_verify_notebook, gemini_verify_tests, gemini_fold_additions, gemini_amend_explanation
+from .claude import claude_generate_code, claude_validate_code, claude_explain_code, claude_generate_cell_name, claude_generate_test_code, claude_generate_unit_test_code, claude_verify_notebook, claude_verify_tests, claude_fold_additions, claude_amend_explanation
+from .openai import openai_generate_code, openai_validate_code, openai_explain_code, openai_generate_cell_name, openai_generate_test_code, openai_generate_unit_test_code, openai_verify_notebook, openai_verify_tests, openai_fold_additions, openai_amend_explanation
+from .local_gpt_oss import local_generate_code, local_validate_code, local_explain_code, local_generate_cell_name, local_generate_test_code, local_generate_unit_test_code, local_verify_notebook, local_verify_tests, local_fold_additions, local_amend_explanation
 
 AI_PROVIDERS = {
-    "gemini": {"generate": gemini_generate_code, "validate": gemini_validate_code, "name": gemini_generate_cell_name, "generate_test": gemini_generate_test_code, "generate_unit_test": gemini_generate_unit_test_code, "verify_notebook": gemini_verify_notebook, "verify_tests": gemini_verify_tests},
-    "claude": {"generate": claude_generate_code, "validate": claude_validate_code, "name": claude_generate_cell_name, "generate_test": claude_generate_test_code, "generate_unit_test": claude_generate_unit_test_code, "verify_notebook": claude_verify_notebook, "verify_tests": claude_verify_tests},
+    "gemini": {"generate": gemini_generate_code, "validate": gemini_validate_code, "explain": gemini_explain_code, "name": gemini_generate_cell_name, "generate_test": gemini_generate_test_code, "generate_unit_test": gemini_generate_unit_test_code, "verify_notebook": gemini_verify_notebook, "verify_tests": gemini_verify_tests, "fold": gemini_fold_additions, "amend_explanation": gemini_amend_explanation},
+    "claude": {"generate": claude_generate_code, "validate": claude_validate_code, "explain": claude_explain_code, "name": claude_generate_cell_name, "generate_test": claude_generate_test_code, "generate_unit_test": claude_generate_unit_test_code, "verify_notebook": claude_verify_notebook, "verify_tests": claude_verify_tests, "fold": claude_fold_additions, "amend_explanation": claude_amend_explanation},
+    "openai": {"generate": openai_generate_code, "validate": openai_validate_code, "explain": openai_explain_code, "name": openai_generate_cell_name, "generate_test": openai_generate_test_code, "generate_unit_test": openai_generate_unit_test_code, "verify_notebook": openai_verify_notebook, "verify_tests": openai_verify_tests, "fold": openai_fold_additions, "amend_explanation": openai_amend_explanation},
+    # A model running on this machine (see local_models.py); no API key.
+    "local": {"generate": local_generate_code, "validate": local_validate_code, "explain": local_explain_code, "name": local_generate_cell_name, "generate_test": local_generate_test_code, "generate_unit_test": local_generate_unit_test_code, "verify_notebook": local_verify_notebook, "verify_tests": local_verify_tests, "fold": local_fold_additions, "amend_explanation": local_amend_explanation},
 }
 
 MAX_OUTPUT_CHARS_FOR_AI = 2000
+
+
+def normalize_notebook_name(new_name):
+    """The bare notebook name from user input.
+
+    Takes the basename (a typed path is not a way to write elsewhere) and drops a
+    trailing .plnb/.ipynb if the user typed one, so the caller can append the
+    canonical extension itself. Raises ValueError when nothing is left. Shared by
+    rename() and by the new-notebook route, so both validate identically."""
+    name = os.path.basename((new_name or '').strip())
+    for ext in ('.plnb', '.ipynb'):
+        if name.lower().endswith(ext):
+            name = name[:-len(ext)]
+            break
+    name = name.strip()
+    if not name:
+        raise ValueError("Please provide a name for the notebook.")
+    return name
+
+
+def unique_notebook_path(folder, name):
+    """The (name, path) to use for a new .plnb in `folder`, avoiding collisions.
+
+    If `name`.plnb is taken, tries name_2, name_3, ... Returns the name actually
+    chosen together with its full path, so callers can report the real name back
+    to the user. Shared by rename(), save_copy() and the new-notebook route, so
+    that naming a notebook never fails just because the name is in use."""
+    candidate = name
+    n = 1
+    while os.path.exists(os.path.join(folder, candidate + ".plnb")):
+        n += 1
+        candidate = f"{name}_{n}"
+    return candidate, os.path.join(folder, candidate + ".plnb")
+
+
+def check_notebook_file(path):
+    """Raise ValueError unless `path` is a file we can open as a notebook.
+
+    Called before opening a notebook the user picked, from the process that can
+    still tell them what went wrong: a file that cannot be loaded must be
+    reported here, not discovered by a child process that dies silently. The
+    messages are user-facing.
+
+    The question asked is only "can nbformat load it?", which is exactly what
+    the Plainbook constructor will ask. It is deliberately not a strict
+    validation: nbformat logs schema violations rather than raising, which is
+    what lets our own 'test' cell type round-trip."""
+    if not os.path.exists(path):
+        raise ValueError(f"There is no file at {path}.")
+    if os.path.isdir(path):
+        raise ValueError(f"{os.path.basename(path)} is a folder, not a notebook.")
+    try:
+        nbformat.read(path, as_version=4)
+    except Exception as e:
+        # Deliberately broad: a file can fail to be a notebook in many ways
+        # (bad JSON, no 'cells', a top-level array, an unreadable encoding),
+        # and each nbformat version raises its own assortment of types.
+        raise ValueError(
+            f"{os.path.basename(path)} is not a notebook file.") from e
 
 
 class ExecutionError(Exception):
@@ -40,6 +106,13 @@ class CellExecutionError(Exception):
         self.ename = ename
         self.evalue = evalue
         super().__init__(f"{ename}: {evalue}")
+
+class ClarificationNeeded(Exception):
+    """Raised when the AI asks questions instead of generating code. The cell is
+    left unchanged."""
+    def __init__(self, questions):
+        self.questions = questions
+        super().__init__("The AI needs clarification before generating code.")
 
 def getlist(value):
     """Utility to ensure a value is a list."""
@@ -56,6 +129,30 @@ def tostring(value):
         return "".join(value)
     else:
         return str(value)
+
+# What counts as "this cell is in error". Besides a formal error output, an
+# error-like stderr stream counts too: an uncaught traceback or a warning that
+# the code printed to stderr rather than raised. Kept deliberately in step with
+# outputsHaveError() in js/errorUtils.js — the client uses that to decide
+# whether to offer the "Fix Code" button, and the server uses this to decide
+# whether there is an error to fix. If the two disagree, the button appears for
+# an error the server does not see, and the fix silently does nothing.
+ERROR_LIKE_RE = re.compile(
+    r"\b\w*(?:Error|Warning|Exception)\b|Traceback \(most recent call last\)")
+
+
+def is_error_like_stderr(output):
+    """True when `output` is a stderr stream whose text looks like an error."""
+    return (output.get('output_type') == 'stream'
+            and output.get('name') == 'stderr'
+            and bool(ERROR_LIKE_RE.search(tostring(output.get('text', '')))))
+
+
+def outputs_have_error(outputs):
+    """True when any output is a formal error or an error-like stderr stream."""
+    return any(o.get('output_type') == 'error' or is_error_like_stderr(o)
+               for o in getlist(outputs or []))
+
 
 VARIABLE_INSPECTION_CODE = """
 import json
@@ -121,6 +218,27 @@ def _generate_random_name():
     return _random_word() + '_' + _random_word()
 
 
+class _LiveCellMeta:
+    """Per-cell, session-only skip metadata that is NOT serialized to the .plnb.
+
+    Same category as Plainbook._cell_states: it is relative to the live kernel
+    and is rebuilt each session, so it is kept off cell.metadata (which nbformat
+    writes to disk) and stored on the Plainbook, keyed by cell.id. __slots__ is
+    the single source of truth for the set of ephemeral keys.
+
+    output_hash is the hash of the source that produced the cell's currently
+    stored output — whatever that output is, including an error and including
+    nothing — or None when no stored output belongs to the current source. The
+    execution-skip runs the cell for real as soon as it stops matching the
+    cell's current source."""
+    __slots__ = ('output_hash', 'input_group_fingerprints', 'accessed_symbols',
+                 'accessed_symbol_hashes', 'modified_symbols', 'deleted_symbols')
+
+    def __init__(self):
+        for k in self.__slots__:
+            setattr(self, k, None)
+
+
 class Plainbook:
     """Plainbook implementation backed by the snapshot kernel."""
 
@@ -148,7 +266,14 @@ class Plainbook:
         self._sk_base_url = f"http://127.0.0.1:{self._sk_port}"
         self._current_exec_id = None
         self._cell_states = {}
+        self._live_states = set()        # kernel state names created this session (for execution-skip)
+        self._live_cell_meta = {}        # cell.id -> _LiveCellMeta (session-only skip metadata, not serialized)
         self._unit_test_states = {}     # "{cell_id}:{test_name}:{role}" -> kernel state name
+        # Keep generation and execution counters. 
+        self._requested_generations = 0
+        self._performed_generations = 0
+        self._requested_executions = 0
+        self._performed_executions = 0
         # Unit test validity is stored inline in cell.metadata.unit_tests[name]['validity']
         self._sk_process = subprocess.Popen(
             [sys.executable, "-m", "snapshot_kernel.main",
@@ -221,6 +346,89 @@ class Plainbook:
                     return state
         return "initial"
 
+    @staticmethod
+    def _hash_text(text):
+        """SHA-256 hex digest of a text field (treats None as empty)."""
+        return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+
+    def _live(self, cell):
+        """Return the cell's session-only skip metadata (a _LiveCellMeta),
+        creating it on first access. Not serialized (kept off cell.metadata)."""
+        lm = self._live_cell_meta.get(cell.id)
+        if lm is None:
+            lm = self._live_cell_meta[cell.id] = _LiveCellMeta()
+        return lm
+
+    def _code_matches_description(self, cell):
+        """True if the cell's code was generated from its current description
+        (the stored code_description_hash equals the current description_hash)."""
+        dh = cell.metadata.get('description_hash')
+        ch = cell.metadata.get('code_description_hash')
+        return bool(dh) and dh == ch
+
+    def _refresh_code_hash(self, cell):
+        """Store the hash of the cell's current source code, and drop the AI code
+        explanation if the code it was written for has changed. Called wherever
+        new source is produced (AI generation, manual edit, clear). Returns True
+        iff an explanation was cleared."""
+        cell.metadata['code_hash'] = self._hash_text(cell.source)
+        if cell.metadata.get('ai_code_explanation') is None:
+            return False
+        if cell.metadata.get('code_hash_for_code_explanation') == cell.metadata['code_hash']:
+            return False              # explanation still describes the current code
+        for k in ('ai_code_explanation', 'ai_code_explanation_timestamp',
+                  'code_hash_for_code_explanation'):
+            cell.metadata.pop(k, None)
+        return True
+
+    def _drop_outputs(self, cell):
+        """Discard a cell's stored output and the execution-skip's claim on it.
+
+        output_hash names the source that produced the stored output. Discarding
+        the output leaves nothing for a skip to reuse, and an empty output list
+        is a legal result in its own right (a cell like `v = 1` produces none),
+        so the hash cannot encode the difference: it has to be cleared
+        explicitly. Otherwise _try_skip_execution "succeeds" by handing back the
+        empty output and marking the cell executed and up to date."""
+        cell.outputs = []
+        self._live(cell).output_hash = None
+
+    def _accessed_vars_unchanged(self, cell, index):
+        """True iff every symbol the cell read still hashes to the stored value in
+        the cell's current input state. Conservative: returns False if the cell
+        was never successfully executed or the hashes can't be obtained."""
+        accessed = self._live(cell).accessed_symbols
+        if accessed is None:
+            return False              # never executed -> no baseline
+        if not accessed:
+            return True               # reads nothing pre-existing
+        stored = self._live(cell).accessed_symbol_hashes or {}
+        input_state = self._find_input_state(index)
+        try:
+            resp = self._sk_request("POST", "/symbol_hashes", {
+                "state_name": input_state, "symbols": accessed, "hash_algo": "full",
+            })
+        except Exception:
+            return False              # state evicted / kernel issue -> regenerate
+        current = resp.get("hashes", {})
+        return all(stored.get(s) == current.get(s) for s in accessed)
+
+    def _skip_code_generation(self, cell, index):
+        """Mark the code valid without calling AI, when it is byte-identical to
+        what a regeneration would produce (description unchanged and accessed
+        variables unchanged). Because nothing about the cell changed, this is a
+        true no-op for the cell's output and execution state: the existing
+        output stays valid (so the execution-skip can preserve it) and
+        last_valid_output_cell / last_executed_cell are left untouched. Only the
+        code-valid watermark advances. cell.source is left unchanged, which is
+        also what keeps the execution-skip eligible: its key is the hash of the
+        source, so leaving the source alone leaves the stored output valid."""
+        cell.metadata['code_description_hash'] = cell.metadata.get('description_hash')
+        cell.metadata['code_timestamp'] = datetime.datetime.now().isoformat()
+        self.last_valid_code_cell = index
+        self._write()
+        return cell.source, True, None   # (code, success, amended) — same shape as real path
+
     # Unit test validity tracking
 
     _UT_CASCADE = ['setup_code', 'setup_output', 'target_output', 'test_code', 'test_output']
@@ -281,8 +489,12 @@ class Plainbook:
 
     # Kernel methods
 
-    def execute_cell(self, index):
-        """Executes a code cell by index against the appropriate snapshot."""
+    def execute_cell(self, index, force=False):
+        """Executes a code cell by index against the appropriate snapshot.
+
+        ``force`` skips the execution fast path, so the cell really runs even
+        when its code and inputs are unchanged. Set it for cells with inputs the
+        skip cannot track (the current time, random numbers, external files)."""
         with self._lock:
             if index < 0 or index >= len(self.nb.cells):
                 raise ExecutionError("Cell index out of range")
@@ -291,13 +503,16 @@ class Plainbook:
             cell = self.nb.cells[index]
             if cell.cell_type != 'code':
                 return None, "Not a code cell"
-            if index <= min(self.last_executed_cell, self.last_valid_output_cell):
+            # Already executed with a still-valid output: hand it straight back.
+            # A forced run is precisely the request to ignore this.
+            if not force and index <= min(self.last_executed_cell, self.last_valid_output_cell):
                 return cell.outputs, "Cached"
             # Checks that all intervening cells between last_executed_cell and index are non-code.
             for i in range(self.last_executed_cell + 1, index):
                 if self.nb.cells[i].cell_type == 'code':
                     raise ExecutionError("Cannot execute cell out of order")
 
+            self._requested_executions += 1
             input_state = self._find_input_state(index)
             cell_id = cell.id
             if cell_id in self._cell_states:
@@ -308,9 +523,24 @@ class Plainbook:
                 while new_state_name in existing_names:
                     new_state_name = uuid.uuid4().hex
                 self._cell_states[cell_id] = new_state_name
+
+            # Whether this cell has already run in this kernel. If it has, a real
+            # re-execution invalidates everything after it (see the success path
+            # below). A successful skip does not: it reproduces the same result,
+            # so the states that followed remain correct.
+            was_reexecution = index <= self.last_executed_cell
+
+            # Fast path unless the caller forces a real run: if this cell's code
+            # is unchanged and nothing it reads has changed, reconstruct its
+            # successor state without re-executing.
+            if not force:
+                skipped = self._try_skip_execution(cell, index, input_state, new_state_name)
+                if skipped is not None:
+                    return skipped
+
+            self._performed_executions += 1
             exec_id = uuid.uuid4().hex
             self._current_exec_id = exec_id
-
             try:
                 result = self._sk_request("POST", "/execute", {
                     "code": cell.source,
@@ -326,6 +556,15 @@ class Plainbook:
             for out in result.get("output", []):
                 outputs.append(nbformat.from_dict(out))
             cell.outputs = outputs
+            # The code that produced the output now stored. Recorded here rather
+            # than in the success path below so that it covers failed runs too:
+            # an error output came from this source just as much as a good one
+            # did, and leaving the hash pointing at the last *successful* source
+            # is what let the execution-skip reuse a result the current code no
+            # longer matches. Recorded after the kernel call returns, not before
+            # it is sent: if _sk_request raises, cell.outputs is untouched too,
+            # so the pair stays consistent.
+            self._live(cell).output_hash = self._hash_text(cell.source)
 
             if result.get("error"):
                 err = result["error"]
@@ -346,13 +585,153 @@ class Plainbook:
                     evalue=err.get("evalue", ""),
                 )
 
-            # Success: update execution pointer
+            # Success: update execution pointer.
+            if was_reexecution:
+                # This cell ran again (a Force Run, typically), so every state
+                # after it was computed from its previous value and is stale.
+                # The snapshots themselves are kept, as _invalidate_from
+                # documents: they are rebuild sources for the execution-skip,
+                # which re-checks its input fingerprints against the current
+                # state and declines when they no longer match.
+                self._invalidate_from(index + 1)
+                self.last_valid_output_cell = min(self.last_valid_output_cell, index)
+                self.last_valid_test_cell = min(self.last_valid_test_cell, index)
             self.last_executed_cell = index
             self.last_valid_output_cell = max(index, self.last_valid_output_cell)
+            self._live_states.add(new_state_name)
             # Get variables for AI context
             cell.metadata['variables'] = self._get_variables()
+            # Record when this cell was last successfully executed.
+            cell.metadata['execution_timestamp'] = datetime.datetime.now().isoformat()
+            # Record the reads/writes and the change-detection baselines used by
+            # the generation-skip (per-variable read hashes) and the
+            # execution-skip (input-state alias-group fingerprints).
+            accessed = result.get("accessed_symbols") or []
+            lm = self._live(cell)
+            lm.accessed_symbols = accessed
+            lm.modified_symbols = result.get("modified_symbols") or []
+            lm.deleted_symbols = result.get("deleted_symbols") or []
+            # output_hash is set above, for failed runs as well as this one.
+            lm.accessed_symbol_hashes = self._read_hashes(input_state, accessed)
+            lm.input_group_fingerprints = self._input_fingerprints(input_state)
             self._write()
             return cell.outputs, 'ok'
+
+    def _read_hashes(self, state_name, symbols):
+        """Per-variable content hashes of `symbols` in a state (for generation-skip)."""
+        if not symbols:
+            return {}
+        try:
+            resp = self._sk_request("POST", "/symbol_hashes", {
+                "state_name": state_name, "symbols": symbols, "hash_algo": "full",
+            })
+            return resp.get("hashes", {})
+        except Exception:
+            return {}
+
+    def _input_fingerprints(self, state_name):
+        """Alias-group fingerprints of a state's variables (for execution-skip)."""
+        try:
+            resp = self._sk_request("POST", "/alias_groups", {"state_name": state_name})
+            return resp.get("fingerprints", [])
+        except Exception:
+            return []
+
+    def _try_skip_execution(self, cell, index, input_state, source_state):
+        """Reconstruct a code cell's successor state without re-executing it, when
+        that is provably equivalent to a real run. Returns (outputs, 'ok') on a
+        successful skip, or None to fall through to a normal execution.
+
+        Safe iff the code that produced the stored output is unchanged and every
+        alias group the cell reads is unchanged (group fingerprints capture
+        cross-variable sharing). The successor is rebuilt group-by-group: the
+        cell's output region from the source state, the pass-through from the
+        current input state (alias groups are disjoint, so this preserves all
+        aliasing). See Plans/execution-skip-via-alias-groups.md.
+        """
+        lm = self._live(cell)
+        # The stored output must have been produced by the code now in the cell.
+        # Any change to the source — AI regeneration, a manual edit, an unfold —
+        # breaks this and forces a real execution.
+        if not lm.output_hash or lm.output_hash != self._hash_text(cell.source):
+            return None
+        # The cell must have run successfully before (baseline present) and its
+        # previous successor state must still be live in the kernel.
+        if lm.modified_symbols is None:
+            return None
+        if source_state not in self._live_states:
+            return None
+        # Never skip a cell that is currently in error. Two reasons, both needed:
+        #  1. An error is not a reusable result. A cell that failed must re-run
+        #     even when nothing about it changed, because what fixed it may be
+        #     outside the notebook: a pip install (see install_package below,
+        #     where the user re-runs the *unmodified* cell), a repaired input
+        #     file, a network resource that came back.
+        #  2. A failed run leaves stale baselines. output_hash correctly names
+        #     the code that produced the error, so re-running unchanged code
+        #     satisfies the check above, while modified_symbols and source_state
+        #     are still those of the last *successful* run. Rebuilding the
+        #     successor state from those would be wrong.
+        if any(getattr(o, 'output_type', None) == 'error' for o in cell.outputs):
+            return None
+
+        accessed = lm.accessed_symbols or []
+        baseline = set(lm.input_group_fingerprints or [])
+
+        # Current input alias groups + fingerprints.
+        try:
+            cur = self._sk_request("POST", "/alias_groups", {"state_name": input_state})
+        except Exception:
+            return None
+        cur_var_group = {}
+        for group, fp in zip(cur.get("groups", []), cur.get("fingerprints", [])):
+            for name in group:
+                cur_var_group[name] = fp
+        # Every alias group containing a read variable must be unchanged.
+        for name in accessed:
+            if name not in cur_var_group or cur_var_group[name] not in baseline:
+                return None
+
+        # --- Provably safe to skip: rebuild the successor state. ---
+        touched = (set(accessed)
+                   | set(lm.modified_symbols or [])
+                   | set(lm.deleted_symbols or []))
+        deleted = set(lm.deleted_symbols or [])
+        # Output region: source variables whose source-group holds a touched var.
+        try:
+            src = self._sk_request("POST", "/alias_groups", {"state_name": source_state})
+        except Exception:
+            return None
+        source_vars = set()
+        for group in src.get("groups", []):
+            if any(n in touched for n in group):
+                source_vars.update(group)
+        # Pass-through: current-input variables not taken from source, not deleted.
+        input_vars = [n for n in cur_var_group
+                      if n not in source_vars and n not in deleted]
+
+        try:
+            self._sk_request("POST", "/rebuild_state", {
+                "input_state": input_state,
+                "source_state": source_state,
+                "source_vars": sorted(source_vars),
+                "input_vars": sorted(input_vars),
+                "new_state_name": source_state,
+            })
+        except Exception:
+            return None
+
+        # Externally identical to a real execution, minus the computation.
+        self._live_states.add(source_state)
+        self.last_executed_cell = index
+        self.last_valid_output_cell = max(index, self.last_valid_output_cell)
+        cell.metadata['execution_timestamp'] = datetime.datetime.now().isoformat()
+        cell.metadata['variables'] = self._get_variables()
+        # Refresh the change-detection baselines for the next run.
+        lm.input_group_fingerprints = cur.get("fingerprints", [])
+        lm.accessed_symbol_hashes = self._read_hashes(input_state, accessed)
+        self._write()
+        return cell.outputs, 'ok'
 
     def _get_variables(self, state_name=None):
         """Execute the variable inspection code against a given or last executed state."""
@@ -395,39 +774,71 @@ class Plainbook:
             return {}
 
     def _reset_kernel(self):
-        """Reset the snapshot kernel: clear all states, reset pointers."""
+        """Reset the snapshot kernel: clear ALL states and reset execution.
+
+        Deletes every kernel snapshot (via /reset), forgets the state-name and
+        live-state maps (including the per-cell execution-skip baselines), resets
+        the execution pointers, and clears outputs, so that after a restart every
+        cell is genuinely re-executed (nothing is reconstructed). Persisted code
+        metadata (code_hash/code_description_hash/description_hash) is preserved."""
         self._sk_request("POST", "/reset")
         self.last_executed_cell = -1
         self.last_valid_output_cell = -1
         self.last_valid_test_cell = -1
         self._cell_states.clear()
+        self._live_states.clear()
+        self._live_cell_meta.clear()
         self._unit_test_states.clear()
         for cell in self.nb.cells:
             if cell.cell_type in ('code', 'test'):
                 cell.outputs = []
+        self._write()
         if self.debug:
             print("Snapshot kernel reset complete.")
 
     def _invalidate_execution(self, index):
-        """Delete snapshot states from cell index onward. Preserves earlier snapshots."""
+        """Mark execution invalid from cell index onward. Preserves earlier snapshots."""
         self._invalidate_from(index)
 
     def _invalidate_from(self, index):
-        """Delete snapshot states from cell index onward.
-        Dict entries are kept so state names can be reused on re-execution."""
+        """Mark execution invalid from cell index onward (lower last_executed_cell).
+
+        Snapshot states from *index* onward are intentionally kept: they are
+        stale as *inputs* (guarded by last_executed_cell) but serve as rebuild
+        *sources* for the execution-skip, and are overwritten on re-execution.
+        """
         for i in range(index, len(self.nb.cells)):
             cell = self.nb.cells[i]
-            state_name = self._cell_states.get(cell.id)
-            if state_name:
-                try:
-                    self._sk_request("DELETE", f"/states/{state_name}")
-                except Exception:
-                    pass
-                # Keep dict entry — name will be reused on re-execution
             # Invalidate unit tests for cells at or after the invalidation point
             if cell.metadata.get('unit_tests'):
                 self._invalidate_all_unit_tests(i, 'setup_code')
         self.last_executed_cell = min(self.last_executed_cell, index - 1)
+
+    def install_package(self, module_name):
+        """Installs the pip package providing `module_name` by executing pip
+        in the kernel (against the initial state, via a throwaway snapshot:
+        pip changes the environment on disk, not the in-memory state).
+        Returns (success, output_text)."""
+        package = resolve_package_name(module_name)
+        with self._lock:
+            temp_state = uuid.uuid4().hex
+            try:
+                result = self._sk_request("POST", "/execute", {
+                    "code": PIP_INSTALL_CODE % json.dumps(package),
+                    "exec_id": uuid.uuid4().hex,
+                    "state_name": "initial",
+                    "new_state_name": temp_state,
+                })
+            finally:
+                try:
+                    self._sk_request("DELETE", f"/states/{temp_state}")
+                except Exception:
+                    pass
+        stdout_text = ""
+        for out in result.get("output", []):
+            if out.get("output_type") == "stream" and out.get("name") == "stdout":
+                stdout_text += tostring(out.get("text", ""))
+        return parse_pip_install_result(stdout_text)
 
     def interrupt_kernel(self):
         """Interrupt the currently running execution."""
@@ -474,6 +885,29 @@ class Plainbook:
                             cell.metadata['code_timestamp'] = datetime.datetime.now().isoformat()
                         if cell.metadata.get('explanation_timestamp') is None:
                             cell.metadata['explanation_timestamp'] = datetime.datetime.now().isoformat()
+                        # Backfill the description hash so unchanged explanations
+                        # can be recognized. code_description_hash is intentionally
+                        # NOT backfilled (we can't assume old code matches its
+                        # description, so it should regenerate on demand).
+                        cell.metadata.setdefault(
+                            'description_hash', self._hash_text(cell.metadata.get('explanation')))
+                        # code_hash tracks the actual source (overwrite any legacy
+                        # value that used this key for the description hash). Treat
+                        # an existing explanation as valid for the loaded code
+                        # (explanation + code were saved together).
+                        cell.metadata['code_hash'] = self._hash_text(cell.source)
+                        if cell.metadata.get('ai_code_explanation') is not None:
+                            cell.metadata.setdefault(
+                                'code_hash_for_code_explanation', cell.metadata['code_hash'])
+                        if cell.cell_type == 'code':
+                            # Present as null until the cell is first executed.
+                            cell.metadata.setdefault('execution_timestamp', None)
+                            # Migration: earlier versions serialized these
+                            # session-only skip baselines into the file. They now
+                            # live in self._live_cell_meta, so drop any stale
+                            # copies rather than let them linger / be rewritten.
+                            for k in _LiveCellMeta.__slots__:
+                                cell.metadata.pop(k, None)
         except (FileNotFoundError, OSError):
             # Ensure parent directory exists
             parent = os.path.dirname(self.path) or "."
@@ -492,6 +926,14 @@ class Plainbook:
         self.last_valid_code_cell = self.nb.metadata.get('last_valid_code_cell', -1)
         self.last_valid_output_cell = self.nb.metadata.get('last_valid_output', -1)
         self.last_valid_test_cell = self.nb.metadata.get('last_valid_test_cell', -1)
+
+        # Migrate cells written before amend: keep their additions as guidance.
+        for cell in self.nb.cells:
+            additions = cell.metadata.pop('additions', None)
+            if additions:
+                base = self._normalize_explanation(cell.metadata.get('explanation'))
+                guidance = "\n".join(f"- {a.get('text', '')}" for a in additions)
+                cell.metadata['explanation'] = f"{base}\n\nAdditional guidance:\n{guidance}"
 
         # Migrate old unit test format (no 'cells' wrapper) to new format
         for cell in self.nb.cells:
@@ -513,6 +955,35 @@ class Plainbook:
                     else:
                         ut['validity'] = validity
 
+    def _cells_citing_paths(self, removed_paths):
+        """Sorted indices of code cells whose generated source references any of
+        the given file paths."""
+        paths = [p for p in removed_paths if p]
+        return [i for i, cell in enumerate(self.nb.cells)
+                if cell.cell_type == 'code'
+                and any(p in (cell.source or '') for p in paths)]
+
+    def _invalidate_cells_for_removed_files(self, removed_paths):
+        """Force-regenerate the code cells that cite any removed input-file path.
+
+        For each citing cell, clears code_description_hash (so the generation-skip
+        fast path cannot keep the now-stale code) and output_hash (an execution artifact),
+        then lowers the code/output/test watermarks to just before the earliest
+        citing cell. No-op if no cell cites a removed file (e.g. a pure file add,
+        or a removed file that no cell references). Caller holds self._lock and
+        persists via _write(); last_executed_cell (kernel snapshots) is left
+        alone, matching the previous invalidation behaviour."""
+        citing = self._cells_citing_paths(removed_paths)
+        if not citing:
+            return
+        for i in citing:
+            self.nb.cells[i].metadata.pop('code_description_hash', None)
+            self._live(self.nb.cells[i]).output_hash = None
+        boundary = min(citing) - 1
+        self.last_valid_code_cell = min(self.last_valid_code_cell, boundary)
+        self.last_valid_output_cell = min(self.last_valid_output_cell, boundary)
+        self.last_valid_test_cell = min(self.last_valid_test_cell, boundary)
+
     def _filter_input_files(self):
         """Filters the input files from notebook metadata."""
         if 'input_files' in self.nb.metadata:
@@ -527,13 +998,61 @@ class Plainbook:
                     missing_input_files.append(f)
             self.nb.metadata['input_files'] = present_input_files
             self.nb.metadata['missing_input_files'] = missing_input_files
+            # Condition-1: files listed by the notebook are missing on disk, so
+            # the code that refers to them must be regenerated -- invalidate only
+            # the cells that actually cite a missing file.
+            if missing_input_files:
+                self._invalidate_cells_for_removed_files(
+                    f.get('path') for f in missing_input_files)
 
-    def _write(self):
+    def _write(self, path=None):
+        """Write the notebook to `path`, defaulting to its own path.
+
+        The explicit path is for save_copy(), which writes the same content
+        elsewhere without this notebook changing where it lives."""
         self.nb.metadata['last_valid_code_cell'] = self.last_valid_code_cell
         self.nb.metadata['last_valid_output'] = self.last_valid_output_cell
         self.nb.metadata['last_valid_test_cell'] = self.last_valid_test_cell
-        with open(self.path, "w") as f:
+        with open(path or self.path, "w") as f:
             nbformat.write(self.nb, f)
+
+    def rename(self, new_name):
+        """Rename the notebook by saving a *copy* under a new name (with a
+        .plnb extension) in the same directory, and switching all future saves
+        to it. The original file is left untouched. Because the notebook is
+        saved continuously, simply changing the name/path and writing once is
+        enough for it to continue naturally under the new name.
+
+        A name already in use is not an error: _2, _3, ... is appended, and the
+        name the notebook actually took is reflected in self.name.
+
+        Raises ValueError on an empty name.
+        """
+        with self._lock:
+            name = normalize_notebook_name(new_name)
+            if name == self.name:
+                return
+            parent = os.path.dirname(self.path) or "."
+            self.name, self.path = unique_notebook_path(parent, name)
+            self._write()
+
+    def save_copy(self, new_name, folder=None):
+        """Write a copy of this notebook under a new name, in `folder`.
+
+        `folder` defaults to this notebook's own folder, and is expected to have
+        been validated by the caller. This notebook's own name and path are
+        untouched; the copy is just a file on disk, which the caller then opens
+        as its own plainbook. Adds _2, _3, ... if the requested name is taken.
+        Returns (name, path).
+
+        Raises ValueError on an empty name.
+        """
+        with self._lock:
+            name = normalize_notebook_name(new_name)
+            parent = folder or os.path.dirname(self.path) or "."
+            name, path = unique_notebook_path(parent, name)
+            self._write(path)
+            return name, path
 
     def append_log_entry(self, entry):
         """Append an action-log entry to nb.metadata['log'] and persist.
@@ -741,15 +1260,27 @@ class Plainbook:
             assert 0 <= index < len(self.nb.cells)
             cell = self.nb.cells[index]
             cell.source = source
+            if cell.cell_type in ('code', 'test'):
+                # New source: refresh the code hash and drop a now-stale explanation.
+                self._refresh_code_hash(cell)
+                # Hand-written code was not generated from the description, so
+                # the generation-skip must not assume regenerating would produce
+                # what is already here. Clearing the pin makes
+                # _code_matches_description() false, so Generate really calls the
+                # AI. Same idiom as _invalidate_cells_for_removed_files().
+                cell.metadata.pop('code_description_hash', None)
             self._clear_validation(cell)  # Clear any cached validation results
             cell.metadata['code_timestamp'] = datetime.datetime.now().isoformat()
             if cell.cell_type == 'test':
-                cell.outputs = []
+                self._drop_outputs(cell)
                 # The user has updated the test code; assume this cell valid, following invalid.
                 self.last_valid_test_cell = min(self.last_valid_test_cell, index)
             elif cell.cell_type == 'code':
-                # Reset outputs and execution count on code cell edit
-                cell.outputs = []
+                # The output produced by the pre-edit code is kept, so the user
+                # can still see what the cell last did. It is no longer current:
+                # last_valid_output_cell below marks it stale (the UI labels it
+                # so), and the execution-skip declines because the source it was
+                # produced from no longer matches, so a re-run really re-runs.
                 if index <= self.last_executed_cell:
                     self._invalidate_execution(index)
                 # The user has updated the code.  We will assume this
@@ -773,8 +1304,14 @@ class Plainbook:
             cell = self.nb.cells[index]
             assert cell.cell_type in ('code', 'test')
             cell.source = ''
+            # Clearing the code invalidates any explanation of it.
+            self._refresh_code_hash(cell)
+            # Empty source was not generated from the description, so the
+            # generation-skip must not assume regenerating would reproduce it.
+            # Same idiom as set_cell_source().
+            cell.metadata.pop('code_description_hash', None)
             self._clear_validation(cell)  # Clear any cached validation results
-            cell.outputs = []
+            self._drop_outputs(cell)
             if cell.cell_type == 'test':
                 self.last_valid_test_cell = min(self.last_valid_test_cell, index - 1)
             else:
@@ -797,6 +1334,7 @@ class Plainbook:
             assert cell.cell_type in ('code', 'test')
             cell.metadata['explanation'] = explanation
             cell.metadata['explanation_timestamp'] = datetime.datetime.now().isoformat()
+            cell.metadata['description_hash'] = self._hash_text(explanation)
             if cell.cell_type == 'test':
                 self.last_valid_test_cell = min(self.last_valid_test_cell, index - 1)
             else:
@@ -814,6 +1352,101 @@ class Plainbook:
                     if self.nb.cells[j].metadata.get('unit_tests'):
                         self._invalidate_all_unit_tests(j, 'setup_code')
             self._write()
+
+
+    # Amend and fold
+
+    @staticmethod
+    def _normalize_explanation(explanation):
+        """Coerces an explanation to a string (new cells store [] initially)."""
+        if isinstance(explanation, list):
+            return ''.join(explanation)
+        return explanation or ''
+
+    def _mark_code_stale(self, index):
+        """Invalidates a cell and everything downstream, as an explanation edit does."""
+        self.last_valid_code_cell = min(self.last_valid_code_cell, index - 1)
+        self.last_valid_output_cell = min(self.last_valid_output_cell, index - 1)
+        self.last_valid_test_cell = min(self.last_valid_test_cell, index - 1)
+        if self.nb.cells[index].metadata.get('unit_tests'):
+            self._invalidate_all_unit_tests(index, 'setup_code')
+        for j in range(index + 1, len(self.nb.cells)):
+            if self.nb.cells[j].metadata.get('unit_tests'):
+                self._invalidate_all_unit_tests(j, 'setup_code')
+
+    def propose_amend(self, api_key, index, text, ai_provider="gemini", model=None):
+        """Returns the explanation rewritten to incorporate `text`. Does not modify
+        the cell; the caller reviews the result and calls commit_amend."""
+        with self._lock:
+            assert 0 <= index < len(self.nb.cells)
+            cell = self.nb.cells[index]
+            assert cell.cell_type in ('code', 'test')
+            base = self._normalize_explanation(cell.metadata.get('explanation'))
+            if not (text or '').strip():
+                return base
+            if self.ai_request_pending:
+                raise RuntimeError("An AI request is already pending.")
+            try:
+                self.ai_request_pending = True
+                fold_fn = AI_PROVIDERS[ai_provider]["fold"]
+                return fold_fn(api_key, explanation=base, additions=[text], model=model,
+                               debug=self.debug, dump_ai_requests=self.dump_ai_requests)
+            finally:
+                self.ai_request_pending = False
+
+    def commit_amend(self, index, folded_explanation):
+        """Installs a folded explanation, snapshotting the explanation and code it
+        replaces so it can be undone. Marks the code stale: the folded text has not
+        generated code yet, and the caller regenerates from it."""
+        with self._lock:
+            assert 0 <= index < len(self.nb.cells)
+            cell = self.nb.cells[index]
+            assert cell.cell_type in ('code', 'test')
+            cell.metadata['explanation_prefold'] = {
+                'explanation': self._normalize_explanation(cell.metadata.get('explanation')),
+                'source': tostring(cell.source),
+            }
+            cell.metadata['explanation'] = folded_explanation
+            cell.metadata['explanation_timestamp'] = datetime.datetime.now().isoformat()
+            cell.metadata['description_hash'] = self._hash_text(folded_explanation)
+            self._mark_code_stale(index)
+            self._write()
+
+    def unfold(self, index):
+        """Restores the explanation and code saved by commit_amend, returning both,
+        or None if there is no snapshot. A restored pair already ran together, so
+        only the output is stale. Snapshots from before the amend redesign have no
+        code to restore, and leave the code stale instead."""
+        with self._lock:
+            assert 0 <= index < len(self.nb.cells)
+            cell = self.nb.cells[index]
+            assert cell.cell_type in ('code', 'test')
+            snapshot = cell.metadata.get('explanation_prefold')
+            if not snapshot:
+                return None
+            source = snapshot.get('source')
+            cell.metadata['explanation'] = snapshot.get('explanation', '')
+            cell.metadata['explanation_timestamp'] = datetime.datetime.now().isoformat()
+            restored_hash = self._hash_text(cell.metadata['explanation'])
+            cell.metadata['description_hash'] = restored_hash
+            del cell.metadata['explanation_prefold']
+            if source is None:
+                self._mark_code_stale(index)
+            else:
+                cell.source = source
+                # The restored code was generated from the restored explanation, so
+                # the pair matches and needs no regeneration. Replacing cell.source
+                # also retires the stored output: it was produced by the pre-unfold
+                # code, so the execution-skip declines and the restored code
+                # actually runs.
+                cell.metadata['code_description_hash'] = restored_hash
+                self._refresh_code_hash(cell)
+                self._invalidate_execution(index)
+                self.last_valid_code_cell = min(self.last_valid_code_cell, index)
+                self.last_valid_output_cell = min(self.last_valid_output_cell, index - 1)
+                self.last_valid_test_cell = min(self.last_valid_test_cell, index - 1)
+            self._write()
+            return {'explanation': cell.metadata['explanation'], 'source': source}
 
 
     # Unit test metadata methods (stubs for Phase 1)
@@ -1286,32 +1919,71 @@ class Plainbook:
         return None
 
 
-    def generate_code_cell(self, api_key, index, ai_provider="gemini", model=None, validation_feedback=None):
-        """Generates code for a code or test cell at index using the specified AI provider."""
+    def generate_code_cell(self, api_key, index, ai_provider="gemini", model=None, validation_feedback=None, amend_description=False, force_regenerate=False, ask_questions=False, skip_regeneration=True):
+        """Generates code for a code or test cell at index using the specified AI provider.
+
+        Returns a 3-tuple ``(new_code, success, amended_explanation)``. When the caller
+        requests it (``amend_description``) and the cell had an error that is now fixed,
+        the cell's plain-language description is also amended so that regenerating from
+        it on a clean slate would avoid the error; the amended text is returned as the
+        third element (``None`` otherwise). Amendment is best-effort and never blocks the
+        code fix.
+
+        ``force_regenerate`` bypasses the generation-skip fast path below. Set it for
+        explicit user actions (the Regenerate button), where returning the existing
+        source looks like an AI that changed nothing rather than one that was never
+        asked. The run-driven batch generation leaves it False and keeps the skip.
+
+        ``ask_questions`` and ``skip_regeneration`` carry the global settings of the
+        same names; the caller reads them (main.py owns the settings file) and passes
+        them in. With ``skip_regeneration`` False the fast path is disabled entirely,
+        so a cell is regenerated whenever generation is requested."""
         with self._lock:
             assert 0 <= index < len(self.nb.cells)
             cell = self.nb.cells[index]
             assert cell.cell_type in ('code', 'test')
             if not self._is_previous_code_and_output_valid(index):
                 raise RuntimeError("Cannot generate code: previous output must be valid.")
+            self._requested_generations += 1
             # Gets code context.
             is_test = (cell.cell_type == 'test')
-            instructions = self._get_instructions(cell.metadata.get('explanation'))
+            error_context = self._get_error_context(index)
+            # Skip the AI regeneration when the code already matches the
+            # (unchanged) description and the accessed variables are unchanged.
+            # Conservative: only when the "Skip regeneration when data is
+            # unchanged" setting is on, code cells only, never when the user
+            # asked for this explicitly, and never when fixing an error or when
+            # explicit validation feedback was requested.
+            if (skip_regeneration and not force_regenerate
+                    and not is_test and validation_feedback is None and not error_context
+                    and self._code_matches_description(cell)
+                    and self._accessed_vars_unchanged(cell, index)):
+                return self._skip_code_generation(cell, index)
+            self._performed_generations += 1 
+            explanation_used = cell.metadata.get('explanation')
+            instructions = self._get_instructions(explanation_used)
+            # Hash of exactly the description sent to the AI, recorded below as
+            # the description the code was generated from.
+            gen_description_hash = self._hash_text(explanation_used)
             files_context = self._get_files_context()
             previous_code_cell = self._get_preceding_code_cell(index)
-            error_context = self._get_error_context(index)
             variable_context = self._get_variables_for_ai(previous_code_cell) if previous_code_cell else ""
             preceding_code = self._get_preceding_code_for_ai(index)
             previous_code = self._get_cell_w_change_noted(cell)
+            # Raw buggy source, captured before it is overwritten with new_code;
+            # needed as context if we amend the description below.
+            buggy_code = cell.source
             # Mark that an AI request is pending
             if self.ai_request_pending:
                 raise RuntimeError("An AI request is already pending.")
+            # Only action cells may ask questions; test cells always generate.
+            # Whether questions are actually asked is up to the AI.
+            ask_questions = (not is_test) and ask_questions
             try:
                 self.ai_request_pending = True
                 ai_fn_key = "generate_test" if is_test else "generate"
                 generate_fn = AI_PROVIDERS[ai_provider][ai_fn_key]
-                new_code = generate_fn(
-                    api_key,
+                gen_kwargs = dict(
                     preceding_code=preceding_code,
                     previous_code=previous_code,
                     instructions=instructions,
@@ -1321,12 +1993,32 @@ class Plainbook:
                     model=model,
                     debug=self.debug,
                     dump_ai_requests=self.dump_ai_requests)
+                if is_test:
+                    new_code = generate_fn(api_key, **gen_kwargs)
+                else:
+                    # The AI returns either the code, or questions for the user.
+                    new_code, questions = generate_fn(
+                        api_key, ask_questions=ask_questions, **gen_kwargs)
+                    # A cancelled request must not raise.
+                    if questions and self.ai_request_pending:
+                        raise ClarificationNeeded(questions)
                 # If we are still in a request, update the cell.
                 if self.ai_request_pending:
                     cell.source = new_code
+                    # Pin the code to the description it was generated from.
+                    cell.metadata['code_description_hash'] = gen_description_hash
+                    cell.metadata.setdefault(
+                        'description_hash', self._hash_text(cell.metadata.get('explanation')))
+                    # Record the hash of the new source and drop any AI code
+                    # explanation that no longer matches the code it described.
+                    self._refresh_code_hash(cell)
                     self._clear_validation(cell)
                     cell.metadata['code_timestamp'] = datetime.datetime.now().isoformat()
-                    cell.outputs = []
+                    # New code: the old output is not its output. Dropping the
+                    # skip's claim along with it is what forces the next run to
+                    # really execute, even when the AI reproduced the previous
+                    # source byte for byte (the common case for "Fix Code").
+                    self._drop_outputs(cell)
                     if is_test:
                         self.last_valid_test_cell = index
                     else:
@@ -1342,11 +2034,47 @@ class Plainbook:
                             if self.nb.cells[j].metadata.get('unit_tests'):
                                 self._invalidate_all_unit_tests(j, 'setup_code')
                         self.last_valid_code_cell = index
+                    # Persist the code fix durably before the (best-effort) amend
+                    # call below, so a slow or failing amend never loses the fix.
                     self._write()
-                    return new_code, True
+
+                    # Amend the description so a clean-slate regeneration would
+                    # avoid the error just fixed. Best-effort, action cells only.
+                    amended = None
+                    if amend_description and error_context and not is_test:
+                        try:
+                            amend_fn = AI_PROVIDERS[ai_provider]["amend_explanation"]
+                            amended = amend_fn(
+                                api_key,
+                                cell.metadata.get('explanation'),
+                                error_context,
+                                buggy_code,
+                                new_code,
+                                model=model,
+                                debug=self.debug,
+                                dump_ai_requests=self.dump_ai_requests)
+                            if amended and amended.strip():
+                                amended = amended.strip()
+                                cell.metadata['explanation'] = amended
+                                # In sync with the just-generated code. Do NOT lower
+                                # last_valid_code_cell/output (that would re-invalidate
+                                # the fix we just made).
+                                cell.metadata['explanation_timestamp'] = cell.metadata['code_timestamp']
+                                # The amended description now describes the current
+                                # code, so keep description_hash == code_description_hash.
+                                amended_hash = self._hash_text(amended)
+                                cell.metadata['description_hash'] = amended_hash
+                                cell.metadata['code_description_hash'] = amended_hash
+                                self._write()
+                            else:
+                                amended = None
+                        except Exception as e:
+                            print(f"Warning: failed to amend explanation for cell {index}: {e}")
+                            amended = None
+                    return new_code, True, amended
                 else:
                     # The request was cancelled, return the current code.
-                    return None, False
+                    return None, False, None
             finally:
                 self.ai_request_pending = False
 
@@ -1417,12 +2145,17 @@ class Plainbook:
 
 
     def generate_unit_test_cell(self, api_key, cell_index, test_name, role,
-                                ai_provider="gemini", model=None, validation_feedback=None):
+                                ai_provider="gemini", model=None, validation_feedback=None,
+                                ask_questions=False, skip_regeneration=True):
         """Generate code for a unit test sub-cell."""
         if role == 'target':
+            # The target is an ordinary action cell, so it obeys the same
+            # global settings as a regular generation.
             return self.generate_code_cell(api_key, cell_index,
                                            ai_provider=ai_provider, model=model,
-                                           validation_feedback=validation_feedback)
+                                           validation_feedback=validation_feedback,
+                                           ask_questions=ask_questions,
+                                           skip_regeneration=skip_regeneration)
         assert role in ('setup', 'test'), f"Invalid role: {role}"
 
         with self._lock:
@@ -1456,6 +2189,28 @@ class Plainbook:
             files_context = self._get_files_context()
             error_context = self._ut_extract_error_context(sub_cell.get('outputs', []))
             preceding_code = self._get_preceding_code_for_ai(cell_index)
+
+            # Hash of the (persisted) generation context. If the sub-cell's code
+            # was already generated from this same context, skip the AI and reuse
+            # the stored source: this avoids regenerating unit-test code on reload
+            # (the context is rebuilt from persisted data, not the live kernel),
+            # while a changed explanation / target / upstream code still forces
+            # a real regeneration.
+            gen_sig = self._hash_text("\x00".join([
+                sub_cell['metadata'].get('explanation', '') or '',
+                target_cell.source or '',
+                preceding_code or '',
+                files_context or '',
+            ]))
+            if (validation_feedback is None and not error_context
+                    and (sub_cell.get('source') or '').strip()
+                    and sub_cell['metadata'].get('generation_context_hash') == gen_sig):
+                test_validity[f'{role}_code_valid'] = True
+                self._invalidate_unit_test(
+                    cell_index, test_name,
+                    'setup_output' if role == 'setup' else 'test_output')
+                self._write()
+                return sub_cell['source'], True
 
             # Previous code for the sub-cell being generated
             existing_source = self._get_cell_text_for_ai(sub_cell)
@@ -1512,6 +2267,7 @@ class Plainbook:
                     dump_ai_requests=self.dump_ai_requests)
                 if self.ai_request_pending:
                     sub_cell['source'] = new_code
+                    sub_cell['metadata']['generation_context_hash'] = gen_sig
                     sub_cell['metadata']['code_timestamp'] = datetime.datetime.now().isoformat()
                     sub_cell['outputs'] = []
                     test_validity = self._get_ut_validity(cell_index, test_name)
@@ -1536,7 +2292,6 @@ class Plainbook:
         with self._lock:
             if self.ai_request_pending:
                 raise RuntimeError("An AI request is already pending.")
-            self.ai_request_pending = True
             assert 0 <= index < len(self.nb.cells)
             cell = self.nb.cells[index]
             assert cell.cell_type in ('code', 'test')
@@ -1546,6 +2301,7 @@ class Plainbook:
             previous_code_cell = self._get_preceding_code_cell(index)
             variable_context = self._get_variables_for_ai(previous_code_cell) if previous_code_cell else ""
             try:
+                self.ai_request_pending = True
                 validate_fn = AI_PROVIDERS[ai_provider]["validate"]
                 validation_result = validate_fn(api_key, previous_code, code_to_validate,
                                                 instructions, variable_context=variable_context,
@@ -1562,6 +2318,44 @@ class Plainbook:
                 self.ai_request_pending = False
 
 
+    def explain_code_cell(self, api_key, index, level=DEFAULT_EXPLANATION_DETAIL_LEVEL, use_bullets=DEFAULT_EXPLANATION_USE_BULLETS, use_latex=DEFAULT_EXPLANATION_USE_LATEX, ai_provider="gemini", model=None):
+        """Generates a natural-language explanation of the code in the cell at
+        index, stored separately from the user's description."""
+        with self._lock:
+            if self.ai_request_pending:
+                raise RuntimeError("An AI request is already pending.")
+            assert 0 <= index < len(self.nb.cells)
+            cell = self.nb.cells[index]
+            assert cell.cell_type in ('code', 'test')
+            code_to_explain = cell.source
+            instructions = self._get_instructions(cell.metadata.get('explanation'))
+            previous_code = self._get_preceding_code_for_ai(index)
+            previous_code_cell = self._get_preceding_code_cell(index)
+            variable_context = self._get_variables_for_ai(previous_code_cell) if previous_code_cell else ""
+            try:
+                self.ai_request_pending = True
+                explain_fn = AI_PROVIDERS[ai_provider]["explain"]
+                explanation = explain_fn(api_key, previous_code, code_to_explain,
+                                         instructions, variable_context=variable_context,
+                                         level=level, use_bullets=use_bullets, use_latex=use_latex,
+                                         model=model, debug=self.debug,
+                                         dump_ai_requests=self.dump_ai_requests)
+                if self.ai_request_pending:
+                    explanation = explanation.strip()
+                    # Store in a separate field so we don't override the user's prompt.
+                    cell.metadata['ai_code_explanation'] = explanation
+                    cell.metadata['ai_code_explanation_timestamp'] = datetime.datetime.now().isoformat()
+                    # Pin the explanation to the exact code it describes, so it is
+                    # dropped when the code later changes.
+                    cell.metadata['code_hash_for_code_explanation'] = self._hash_text(code_to_explain)
+                    self._write()
+                    return explanation, index
+                else:
+                    return None, None
+            finally:
+                self.ai_request_pending = False
+
+
     def validate_unit_test_cell(self, api_key, cell_index, test_name, role,
                                 ai_provider="gemini", model=None):
         """Validates the code of a unit test sub-cell (setup or test).
@@ -1573,7 +2367,6 @@ class Plainbook:
         with self._lock:
             if self.ai_request_pending:
                 raise RuntimeError("An AI request is already pending.")
-            self.ai_request_pending = True
             assert 0 <= cell_index < len(self.nb.cells)
             target_cell = self.nb.cells[cell_index]
             tests = target_cell.metadata.get('unit_tests', {})
@@ -1591,6 +2384,7 @@ class Plainbook:
                 target_variables = unit_test['cells'].get('target', {}).get('variables', {})
                 variable_context = self._format_variables_for_ai(target_variables)
             try:
+                self.ai_request_pending = True
                 validate_fn = AI_PROVIDERS[ai_provider]["validate"]
                 validation_result = validate_fn(
                     api_key, preceding_code, code_to_validate,
@@ -1743,7 +2537,6 @@ class Plainbook:
         with self._lock:
             if self.ai_request_pending:
                 raise RuntimeError("An AI request is already pending.")
-            self.ai_request_pending = True
             provider = AI_PROVIDERS[ai_provider]
             verify_notebook_fn = provider["verify_notebook"]
             verify_tests_fn = provider["verify_tests"]
@@ -1751,6 +2544,7 @@ class Plainbook:
             has_code_cells = any(c.cell_type == 'code' for c in self.nb.cells)
             has_test_cells = any(c.cell_type == 'test' for c in self.nb.cells)
             try:
+                self.ai_request_pending = True
                 notebook_result = None
                 if has_code_cells:
                     payload = self._build_verify_notebook_payload()
@@ -1813,7 +2607,7 @@ class Plainbook:
         with self._lock:
             for cell in self.nb.cells:
                 if cell.cell_type in ('code', 'test'):
-                    cell.outputs = []
+                    self._drop_outputs(cell)
                     # Also clear unit test sub-cell outputs
                     for unit_test in cell.metadata.get('unit_tests', {}).values():
                         unit_test['cells']['setup']['outputs'] = []
@@ -1822,13 +2616,23 @@ class Plainbook:
                         unit_test['cells']['test']['outputs'] = []
             self.last_executed_cell = -1
             self.last_valid_output_cell = -1
+            self._live_states.clear()
             self._write()
 
     def set_input_files(self, files, missing_files=[]):
-        """Sets the input files for the notebook."""
+        """Sets the input files for the notebook. Condition-2: for any file that
+        LEFT the set (deleted, or replaced by a different-path file), regenerate
+        only the code cells whose source cites that file's path — not every cell.
+        A pure file *add* changes nothing. (This is also called on every
+        Files-tab mount with the unchanged selection, hence the diff.)"""
         with self._lock:
+            paths = lambda lst: {f.get('path') for f in (lst or [])}
+            old = (paths(self.nb.metadata.get('input_files'))
+                   | paths(self.nb.metadata.get('missing_input_files')))
+            new = paths(files) | paths(missing_files)
             self.nb.metadata['input_files'] = files
             self.nb.metadata['missing_input_files'] = missing_files
+            self._invalidate_cells_for_removed_files(old - new)
             self._write()
 
 
@@ -1942,15 +2746,24 @@ class Plainbook:
             return unique_name
 
     def _get_error_context(self, cell_index):
-        """If the cell has an error, include its traceback as context."""
+        """If the cell has an error, include its traceback as context.
+
+        Recognises the same two shapes as outputs_have_error(): a formal error
+        output, and an error-like stderr stream (a traceback or a warning the
+        code printed instead of raising). The formal error wins when both are
+        present, since its traceback is the more useful context."""
         context_parts = [
             "The previous attempt to run this cell resulted in this error traceback:"
         ]
         cell = self.nb.cells[cell_index]
         if cell.cell_type != 'code':
             return None
-        for output in reversed(getlist(cell.get('outputs', []))):
-            if output.output_type == 'error':
+        outputs = getlist(cell.get('outputs', []))
+        for output in reversed(outputs):
+            if output.get('output_type') == 'error':
                 traceback = context_parts + getlist(output.get('traceback', []))
                 return "\n".join(traceback)
+        for output in reversed(outputs):
+            if is_error_like_stderr(output):
+                return "\n".join(context_parts + [tostring(output.get('text', ''))])
         return None

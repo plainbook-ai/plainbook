@@ -1,0 +1,18 @@
+{
+  "title": "Plainbook: Natural Language Notebooks",
+  "upload_type": "software",
+  "license": "BSD-3-Clause",
+  "creators": [
+    {"name": "de Alfaro, Luca", "affiliation": "University of California, Santa Cruz", "orcid": "0000-0003-3856-4576"},
+    {"name": "Aubert, Mathis", "affiliation": "University of California, Santa Cruz", "orcid": "0009-0008-3412-1296"},
+    {"name": "Jhala, Ranjit", "affiliation": "University of California, San Diego", "orcid": "0000-0002-1802-9421"},
+    {"name": "Soni, Dhyan"},
+    {"name": "Ejiogu, Uchechi"},
+    {"name": "Pastor, Eliana", "affiliation": "Politecnico di Torino", "orcid": "0000-0002-3664-4137"},
+    {"name": "Baralis, Elena", "affiliation": "Politecnico di Torino", "orcid": "0000-0001-9231-467X"}
+  ],
+  "related_identifiers": [
+    {"identifier": "10.48550/arXiv.2607.05717", "relation": "isSupplementTo", "scheme": "doi"},
+    {"identifier": "https://pypi.org/project/plainbook/", "relation": "isIdenticalTo", "scheme": "url"}
+  ]
+}

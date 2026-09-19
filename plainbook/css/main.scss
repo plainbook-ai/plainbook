@@ -73,6 +73,13 @@ pre[class*="language-"] {
   --bulma-block-spacing: 0;
 }
 
+// MathJax output (see js/markdown.js).  Long display equations scroll
+// sideways instead of widening the cell.
+mjx-container[display="true"] {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 [v-cloak] {
   display: none;
 }
@@ -107,7 +114,7 @@ pre[class*="language-"] {
 }
 
 .explanation-toolbar .toolbar-right .button {
-  @media (max-width: 900px) {
+  @container notebook (max-width: 750px) {
     span:not(.icon):not(.unit-test-counter) {
       display: none !important;
     }
@@ -118,7 +125,7 @@ pre[class*="language-"] {
 }
 
 .explanation-toolbar .toolbar-left .run-button {
-  @media (max-width: 900px) {
+  @container notebook (max-width: 750px) {
     span:not(.icon) {
       display: none !important;
     }
@@ -126,6 +133,25 @@ pre[class*="language-"] {
       margin: 0 !important;
     }
   } 
+}
+
+// Fold review panel
+.fold-review {
+  border: 1px solid var(--bulma-link);
+  border-radius: 6px;
+  background: var(--bulma-scheme-main-bis);
+}
+
+.fold-review .fold-original {
+  border: 1px solid var(--bulma-border);
+  border-radius: 4px;
+  background: var(--bulma-scheme-main);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--bulma-text-weak);
+  // Read side by side with the amended textarea below it, so it matches the
+  // $control-size that every text-entry textarea uses.
+  font-size: var(--bulma-control-size);
 }
 
 // Muted utility for subtle buttons
@@ -136,6 +162,9 @@ pre[class*="language-"] {
 /* Add scroll margin to cells so they don't hide under the navbar when scrolling */
 .notebook-cell {
   scroll-margin-top: 1rem;
+  // Keep an entirely empty cell tall enough to see and click; non-empty cells
+  // are already taller so this only affects empty ones.
+  min-height: 2.75rem;
 }
 
 /* Insert cell button hover zone */
@@ -190,13 +219,58 @@ pre[class*="language-"] {
 .panel-badge { display: inline-block; background: var(--bulma-text-weak); color: var(--bulma-scheme-main); border-radius: 999px; padding: 0.12rem 0.45rem; margin-left: 0.4rem; font-size: 0.8rem; font-weight: 600; }
 .panel-section { border-top: 1px solid var(--bulma-border); }
 
+// ── Code bar: show/hide tabs + code action buttons (CellCodeBar.js) ──
+// Reuses .panel-tab / .panel-divider on the left; the right side holds the
+// Clear / Generate / Validate / Explain buttons after a flex spacer.
+.code-tabs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--bulma-border);
+}
+.code-tabs .code-tab.button { padding-left: 0.5rem; padding-right: 0.5rem; }
+// The lower-bar action buttons are made vertically thinner than a normal
+// small button (tighter padding + line-height; the icon no longer sets a tall
+// floor). Only these buttons — the tabs are unaffected.
+.code-tabs .code-bar-actions .button {
+  height: auto;
+  min-height: 0;
+  padding-top: 0.25rem;
+  padding-bottom: 0.25rem;
+  line-height: 1.15;
+}
+.code-tabs .code-bar-actions .button .icon {
+  height: 1.15em;
+}
+// Collapse the action-button labels to icon-only, on the same signal and at the
+// same threshold as the ExplanationEditor toolbar, so the two bars on a cell
+// always collapse together. Keyed to the width of the notebook column (see the
+// `notebook` container on .notebook-main), not the viewport: the TOC beside it
+// can be resized or closed.
+.code-tabs .code-bar-actions .button {
+  @container notebook (max-width: 750px) {
+    span:not(.icon) {
+      display: none !important;
+    }
+    span.icon {
+      margin: 0 !important;
+    }
+  }
+}
+
 // ── Settings modal (SettingsModal.js) ──
 .settings-key-status { color: var(--bulma-text-weak); background-color: var(--bulma-scheme-main-bis); font-style: italic; }
 .settings-key-masked { cursor: pointer; color: var(--bulma-text-weak); background-color: var(--bulma-scheme-main-bis); }
 .settings-bedrock-status { color: var(--bulma-success); background-color: var(--bulma-scheme-main-bis); font-style: italic; }
+// Local model section (LocalModelPanel.js)
+.local-model-row { padding: 0.75rem 1rem; margin-bottom: 0.75rem; }
+.local-model-progress .progress { flex: 1; }
 
 // ── Input file browser (InputFile.js) ──
 .file-browser { background: var(--bulma-scheme-main); }
+.file-browser-title { padding: 0.4rem 0.5rem; background: var(--bulma-scheme-main-ter); font-weight: bold; display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .file-browser-header { padding: 0.4rem 0.5rem; background: var(--bulma-scheme-main-ter); font-size: 0.85rem; color: var(--bulma-text-weak); }
 .file-browser-filter { padding: 8px; background: var(--bulma-scheme-main-ter); display: flex; gap: 8px; }
 .file-browser-filter input { border: 1px solid var(--bulma-border); }
@@ -204,6 +278,10 @@ pre[class*="language-"] {
 .file-browser-nav .button { border: 1px solid var(--bulma-border); }
 .file-item { padding: 0.1rem 0.5rem; border-bottom: 1px solid var(--bulma-scheme-main-bis); display: flex; align-items: center; gap: 4px; }
 .file-name-link { cursor: pointer; color: var(--bulma-link); font-weight: 500; }
+.file-item:hover { background: var(--bulma-scheme-main-bis); }
+.file-item.is-selected { background: var(--bulma-primary); }
+.file-item.is-selected .file-name-link,
+.file-item.is-selected .icon { color: var(--bulma-primary-invert); }
 .dir-icon { color: var(--bulma-link); }
 .selected-files-panel { width: 300px; background: var(--bulma-scheme-main-bis); display: flex; flex-direction: column; }
 .selected-files-header { padding: 0.5rem; font-weight: bold; background: var(--bulma-scheme-main-ter); }
@@ -214,7 +292,9 @@ pre[class*="language-"] {
 // ── Instructions panel (InstructionsPanel.js) ──
 .instructions-container { background: var(--bulma-scheme-main); }
 .instructions-help { font-size: 0.85rem; color: var(--bulma-text-weak); }
-.instructions-textarea { border: 1px solid var(--bulma-border); border-radius: 4px; font-family: inherit; font-size: 0.9rem; }
+// Not a Bulma .textarea (it flexes to fill the panel), but it matches one:
+// the family comes from .is-family-monospace, the size from $control-size.
+.instructions-textarea { border: 1px solid var(--bulma-border); border-radius: 4px; font-size: var(--bulma-control-size); }
 
 // ── Notebook cell (NotebookCell.js) ──
 .notebook-cell.is-active-cell { border: 2px solid var(--bulma-primary); }
@@ -222,6 +302,8 @@ pre[class*="language-"] {
 
 // ── AppNavbar dropdown header ──
 .ai-provider-header { cursor: default; font-size: 0.8em; text-transform: uppercase; color: var(--bulma-text-weak); }
+// The provider list can be long (several models per vendor): scroll it.
+.ai-provider-menu .dropdown-content { max-height: 70vh; overflow-y: auto; }
 
 // ── Output renderer ──
 .output-text { color: var(--bulma-text); }
@@ -249,12 +331,343 @@ pre[class*="language-"] {
   z-index: 1;
 }
 
+// Missing-module bar: soften the <code> background (Bulma's default is
+// near-black in dark mode, too stark). scheme-main-ter is a soft gray in
+// both light and dark mode.
+.missing-module-bar code {
+  background-color: var(--bulma-scheme-main-ter);
+}
+
 .button .bx {
   font-size: 1.05rem; /* adjust as needed */
 }
 
 .button.is-small .bx {
   font-size: 1rem; /* adjust as needed */
+}
+
+// ── Notebook title (rename) ────────────────────────────────────────────
+// Hover shows an outline (hinting interactivity); click edits.
+.notebook-title-text {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0.1em 0.25em;
+  outline: none;
+  &:hover {
+    outline: 2px solid var(--bulma-link, #485fc7);
+    outline-offset: 2px;
+  }
+}
+
+.notebook-title-input {
+  font-size: inherit;
+  font-weight: inherit;
+  height: auto;
+  padding: 0.1em 0.25em;
+}
+
+// ── Notebook workspace: TOC sidebar + main column (index.html) ─────────
+// The workspace is the flex row under the navbar; .notebook-main is the
+// column holding the panel bar and the scrolling notebook area.
+.notebook-workspace {
+  flex-grow: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.notebook-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+
+  // Query container for the cell toolbars. The width that matters to them is
+  // this column's, not the viewport's: the TOC beside it can be resized or
+  // closed, so the same viewport gives very different room for the buttons.
+  // Named so `@container notebook (...)` cannot accidentally match some other
+  // container that gets introduced closer to the buttons later.
+  container-type: inline-size;
+  container-name: notebook;
+
+  // Square off the panel bar where it meets the sidebar and navbar.
+  > .panel-container {
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    border-top: none;
+    flex-shrink: 0;
+  }
+}
+
+// ── Side index / table of contents (SideIndex.js) ──────────────────────
+.side-index-wrap {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  min-height: 0;
+  align-self: stretch;
+  z-index: 4;
+  overflow: visible;
+
+  &.is-closed {
+    width: 0;
+  }
+  &.is-resizing {
+    cursor: col-resize;
+  }
+  // Collapsed: the toggle is the only affordance left, so it gets a full border.
+  &.is-closed .side-index-toggle {
+    right: -14px;
+    border-left: 1px solid var(--bulma-border, #dbdbdb);
+    border-radius: 4px;
+  }
+}
+
+.side-index {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bulma-scheme-main-bis, #f5f5f5);
+  border-right: 1px solid var(--bulma-border, #dbdbdb);
+  min-height: 0;
+  user-select: none;
+  height: 100%;
+}
+
+// Open/close tab straddling the sidebar's right edge.
+.side-index-toggle {
+  position: absolute;
+  top: 50%;
+  right: -11px;
+  transform: translateY(-50%);
+  z-index: 5;
+  width: 14px;
+  height: 28px;
+  padding: 0;
+  margin: 0;
+  border: 1px solid var(--bulma-border, #dbdbdb);
+  border-left: none;
+  border-radius: 0 4px 4px 0;
+  background: var(--bulma-scheme-main, #fff);
+  color: var(--bulma-text-weak, #7a7a7a);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  box-shadow: 1px 0 2px rgba(0, 0, 0, 0.06);
+
+  &:hover {
+    color: var(--bulma-primary, #3257dc);
+    background: var(--bulma-scheme-main-bis, #f5f5f5);
+  }
+  .bx {
+    font-size: 0.85rem;
+  }
+}
+
+.side-index-title {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.45rem;
+  height: 2.35rem;
+  padding: 0 0.65rem;
+  border-bottom: none;
+  font-size: 0.9rem;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  color: var(--bulma-text, #363636);
+  line-height: 1.2;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.side-index-title-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--bulma-text-weak, #7a7a7a);
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+.side-index-title-text {
+  display: inline-block;
+}
+
+// Mode switcher (outline / other views).
+.side-index-modes {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.15rem;
+  padding: 0.4rem 0.4rem 0.35rem;
+  border-bottom: 1px solid var(--bulma-border, #dbdbdb);
+}
+
+.side-index-mode {
+  flex: 1;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0.3rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--bulma-text-weak, #7a7a7a);
+  line-height: 1.2;
+
+  &:hover {
+    background: var(--bulma-scheme-main, #fff);
+    color: var(--bulma-text, #363636);
+  }
+  &.is-active {
+    background: var(--bulma-scheme-main, #fff);
+    color: var(--bulma-primary, #3257dc);
+    font-weight: 700;
+  }
+}
+
+.side-index-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem 0.35rem 0.75rem 0.35rem;
+  min-height: 0;
+}
+
+.side-index-empty {
+  margin: 0.5rem 0.4rem;
+  font-size: 0.8rem;
+  color: var(--bulma-text-weak, #7a7a7a);
+  line-height: 1.4;
+  user-select: text;
+}
+
+.side-index-list,
+.side-index-sublist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.side-index-sublist {
+  padding-left: 1.15rem;
+
+  > .side-index-item {
+    opacity: 0.75;
+    padding-left: 0.75rem;
+    margin-top: 0.15rem;
+  }
+}
+
+.side-index-item {
+  margin: 0.1rem 0;
+
+  &.side-index-h2 {
+    padding-left: 0.6rem;
+    opacity: 1;
+  }
+}
+
+.side-index-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.1rem;
+}
+
+// Expand/collapse chevron; the spacer keeps leafless rows aligned with it.
+.side-index-expand {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0.15rem 0.1rem;
+  line-height: 1;
+  color: var(--bulma-text-weak, #7a7a7a);
+  border-radius: 3px;
+  width: 1.25rem;
+
+  &:hover {
+    color: var(--bulma-text, #363636);
+    background: var(--bulma-scheme-main, #fff);
+  }
+  &:disabled {
+    opacity: 0.35;
+    cursor: default;
+
+    &:hover {
+      background: transparent;
+      color: var(--bulma-text-weak, #7a7a7a);
+    }
+  }
+}
+
+.side-index-expand-spacer {
+  flex-shrink: 0;
+  width: 1.25rem;
+}
+
+.side-index-link {
+  flex: 1;
+  text-align: left;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0.2rem 0.35rem;
+  border-radius: 3px;
+  font-size: 0.85rem;
+  line-height: 1.35;
+  color: var(--bulma-text, #363636);
+  word-break: break-word;
+  user-select: text;
+
+  &:hover {
+    background: var(--bulma-scheme-main, #fff);
+    color: var(--bulma-primary, #3257dc);
+  }
+}
+
+// Bold and the larger size are reserved for markdown headings (#, ##, ...)
+// in comment cells. Action-cell descriptions use the plain link style.
+.side-index-h1 > .side-index-row > .side-index-link,
+.side-index-h2 > .side-index-row > .side-index-link {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.side-index-preview {
+  margin: 0.1rem 0 0.35rem 1.35rem;
+  padding: 0.25rem 0.4rem;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: var(--bulma-text-weak, #7a7a7a);
+  font-style: italic;
+  word-break: break-word;
+  user-select: text;
+}
+
+// Drag handle for resizing the sidebar.
+.side-index-resizer {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 2;
+}
+
+.side-index-resizer:hover,
+.side-index.is-resizing .side-index-resizer {
+  background: var(--bulma-primary, #3257dc);
+  opacity: 0.35;
 }
 
 // ── Print styles ───────────────────────────────────────────────────────
@@ -271,6 +684,11 @@ pre[class*="language-"] {
     overflow: visible !important;
   }
 
+  // Shrink the base font so the layout prints at desktop-equivalent
+  // proportions. ~75% of the screen size lets ~1100px-of-content fit
+  // the printable page width.
+  html, body { font-size: 0.75rem !important; }
+
   // Release the scroll-locked main layout so the full notebook flows
   // onto multiple printed pages instead of being clipped to viewport.
   #app {
@@ -285,15 +703,35 @@ pre[class*="language-"] {
     padding-bottom: 0 !important;
   }
 
-  // Hide application chrome.
-  .app-toolbar,
+  .notebook-workspace {
+    display: block !important;
+    overflow: visible !important;
+    height: auto !important;
+  }
+  .side-index-wrap,
+  .side-index {
+    display: none !important;
+  }
+
+  // Hide application chrome (always-hidden bits).
   .navbar,
-  .panel-container,
   .modal,
   .ui-error,
   .cell-insert-zone,
-  .cell-label {
+  .cell-label,
+  .missing-module-bar {
     display: none !important;
+  }
+
+  // Hidden in print by default; restored when the server was started
+  // with --print-all (root #app gets the .print-all class).
+  .app-toolbar,
+  .panel-container {
+    display: none !important;
+  }
+  .print-all .app-toolbar,
+  .print-all .panel-container {
+    display: revert !important;
   }
 
   // Hide unit-test overlay and history-viewer chrome if those views are
@@ -306,19 +744,22 @@ pre[class*="language-"] {
   }
 
   // Inside cells: hide editing toolbars, buttons, and validation feedback.
+  // Applies to all cells, including the active one, so the active cell
+  // prints exactly like an inactive cell.
   .notebook-cell {
     .explanation-toolbar,
     .code-cell-toolbar,
     button {
       display: none !important;
     }
+    .validation-cell { display: none !important; }
   }
-  .validation-cell { display: none !important; }
 
-  // Force code content visible (CodeCell uses v-show; CSS overrides
-  // the inline display:none from collapsed state).
+  // Preserve the on-screen show/hide-code state: CodeCell uses v-show,
+  // which sets inline display:none on the collapsed `.code-content`.
+  // We do NOT override that here, so collapsed cells print without code.
+  // For visible code, drop the on-screen indent.
   .code-cell-wrapper .code-content {
-    display: block !important;
     padding-left: 0 !important;
   }
   .code-editor-container {
@@ -344,9 +785,6 @@ pre[class*="language-"] {
     box-shadow: none !important;
     margin: 0 0 0.4rem 0 !important;
     scroll-margin-top: 0 !important;
-  }
-  .notebook-cell.is-active-cell {
-    border: 1px solid #bbb !important;
   }
 
   // Outputs: light backgrounds, dark text, wrap long lines.

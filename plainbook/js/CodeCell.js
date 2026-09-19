@@ -2,10 +2,16 @@ import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from './vu
 
 export default {
     props: ['source', 'executionCount', 'isActive', 'isLocked',
-            'codeValid', 'outputValid', 'executed', 'hasError', 'asRead'],
+            'codeValid', 'outputValid', 'executed', 'hasError', 'asRead', 'externalCollapse'],
     emits: ['save', 'saveandrun', 'update:source', 'activate'],
     setup(props, { emit }) {
         const isCollapsed = ref(true);
+        // When a parent supplies `externalCollapse`, the fold is driven from
+        // outside (the code/explanation tab bar in NotebookCell) and the internal
+        // "Show code" toggle is hidden. Otherwise CodeCell keeps its own fold, as
+        // used by standalone test cells and the unit-test views.
+        const controlled = computed(() => props.externalCollapse !== undefined && props.externalCollapse !== null);
+        const collapsed = computed(() => controlled.value ? props.externalCollapse : isCollapsed.value);
         const isEditing = ref(false);
         const localSource = ref((Array.isArray(props.source) ? props.source.join('') : props.source) || '');
         const originalSource = ref(localSource.value);
@@ -185,18 +191,18 @@ export default {
             if (!isCollapsed.value && isEditing.value) nextTick(autoResize);
         };
 
-        return { isCollapsed, toggleCollapse, isEditing, cancelEdit, localSource,
+        return { isCollapsed, toggleCollapse, controlled, collapsed, isEditing, cancelEdit, localSource,
             localIsLocked, highlightedCode, enterEditMode, enterEditModeAtPoint,
             saveCode, saveAndRunCode, textareaEl, autoResize, handleTabKey, onBlur };
     },
     template: /* html */ `
         <div class="code-cell-wrapper">
-            <div class="code-cell-toolbar" style="display: flex; gap: 0.25rem; align-items: center;">
-                <button class="button is-small is-ghost px-2 mt-1" style="text-decoration: none;"
+            <div v-if="!controlled || !collapsed" class="code-cell-toolbar" style="display: flex; gap: 0.25rem; align-items: center;">
+                <button v-if="!controlled" class="button is-small is-ghost px-2 mt-1" style="text-decoration: none;"
                         @click="toggleCollapse">
-                    {{ isCollapsed ? '▶ &nbsp;Show code' : '▼ &nbsp;Hide code' }}
+                    {{ collapsed ? '▶ &nbsp;Show code' : '▼ &nbsp;Hide code' }}
                 </button>
-                <button v-if="!isActive && isCollapsed" class="button is-small"
+                <button v-if="!controlled && !isActive && collapsed" class="button is-small"
                     style="opacity: 0.6; padding: 0.1rem 0.5rem;"
                     @click.stop="$emit('activate')">
                     <span>Output:&nbsp;</span>
@@ -206,14 +212,14 @@ export default {
                     <span v-else>Up to date</span>
                 </button>
                 <span style="flex: 1;"></span>
-                <button v-if="!isCollapsed && !isEditing && !localIsLocked"
+                <button v-if="isActive && !collapsed && !isEditing && !localIsLocked"
                     class="button is-small is-info mt-1 mr-3"
                     @click="enterEditMode">
                     <span class="icon"><i class="bx bx-pencil"></i></span>
                     <span>Edit Code</span>
                 </button>
             </div>
-            <div v-show="!isCollapsed" class="code-content" style="padding-left: 2.25rem;">
+            <div v-show="!collapsed" class="code-content" style="padding-left: 2.25rem;">
                 <div class="code-editor-container p-2 is-size-7"
                      @dblclick="enterEditModeAtPoint($event)">
                     <pre class="language-python"><code class="language-python" v-html="highlightedCode + '\\n'"></code></pre>

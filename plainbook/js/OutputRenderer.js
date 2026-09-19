@@ -1,7 +1,20 @@
 // OutputRenderer.js
 
+import { isWarningOnlyStderr } from './errorUtils.js';
+
 export default {
     props: ['output'],
+    computed: {
+        // stderr carrying a real failure keeps the danger colours; a stream that
+        // only warns gets red on a light orange ground, so an advisory reads as
+        // one. stdout is ordinary output text.
+        streamClass() {
+            if (this.output.name !== 'stderr') return 'output-text';
+            return isWarningOnlyStderr(this.output)
+                ? 'has-text-danger bg-warning-adaptive p-2'
+                : 'has-text-danger has-background-danger-light p-2';
+        }
+    },
     methods: {
         join(src) { return Array.isArray(src) ? src.join('') : src; },
 
@@ -34,8 +47,8 @@ export default {
     template: /* html */ `
         <div class="output-zone mb-2">
             <div class="output-container mt-1">
-                <pre v-if="output.output_type === 'stream'" 
-                     :class="output.name === 'stderr' ? 'has-text-danger has-background-danger-light p-2' : 'output-text'"
+                <pre v-if="output.output_type === 'stream'"
+                     :class="streamClass"
                      class="output-stream is-family-monospace is-size-7 whitespace-pre-wrap"
                      v-html="ansiToHtml(output.text)"></pre>
 

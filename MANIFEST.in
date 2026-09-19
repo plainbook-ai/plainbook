@@ -1,0 +1,5 @@
+# Files to include in the source distribution (sdist) beyond what setuptools
+# picks up by default. This does not affect the wheel.
+
+# Citation files, linked from the README.
+graft doc

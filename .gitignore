@@ -1,4 +1,5 @@
 plainbook/css/node_modules
+dev-tools/node_modules
 .venv
 __pycache__/
 plainbook/__pycache__/
@@ -18,3 +19,11 @@ raceplan.md
 notes/
 .vscode/
 .prod/
+test_notebooks/
+TODO.md
+Plans/
+remove_names
+remove_output
+
+# Session transcript logs: may contain credentials
+*.jsonl

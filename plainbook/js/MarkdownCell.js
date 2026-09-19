@@ -1,10 +1,11 @@
 import { ref, watch, nextTick } from './vue.esm-browser.js';
+import { createMarkdown } from './markdown.js';
 
 const MarkdownCell = {
     props: ['source', 'startEditKey', 'isActive', 'isLocked'],
     emits: ['save', 'delete', 'moveUp', 'moveDown'],
     setup(props, { emit }) {
-        const md = new markdownit({ html: true });
+        const md = createMarkdown({ html: true });
         const localSource = ref(Array.isArray(props.source) ? props.source.join('') : props.source || '');
         const originalSource = ref(localSource.value);
         const textareaEl = ref(null);
@@ -100,7 +101,7 @@ const MarkdownCell = {
     template: /* html */ `
         <div class="markdown-body content" style="position: relative; min-height: 2.5rem;">
             <div class="p-2 block mb-0" v-if="!isEditing" @dblclick="enterEditMode" 
-                style="min-height: 1.6em" v-html="rendered"></div>
+                style="min-height: 1.6em" v-html="rendered" v-mathjax></div>
 
             <!-- bottom toolbar -->
             <div v-if="!isEditing && isActive && !localIsLocked"

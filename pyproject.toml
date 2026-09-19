@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "plainbook"
-version = "0.2.3"
+version = "0.6.1"
 description = "Plain Language Notebooks"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -23,10 +23,13 @@ dependencies = [
     "google-genai",
     "py-machineid",
     "google-cloud-storage",
-    "snapshot-kernel>=0.1.4",
+    "snapshot-kernel>=0.2.0",
     "nbformat",
+    "openai",
     "pyyaml",
     "requests",
+    # Unpacks the Ollama runtime archive, which is zstd-compressed on Linux only.
+    "zstandard; sys_platform == 'linux'",
 ]
 
 [project.scripts]
@@ -34,15 +37,15 @@ plainbook = "plainbook.main:main"
 
 [project.urls]
 # Links displayed on the PyPI project page
-Homepage = "https://github.com/lucadealfaro/plainbook"
-Issues = "https://github.com/lucadealfaro/plainbook/issues"
+Homepage = "https://github.com/plainbook-ai/plainbook"
+Issues = "https://github.com/plainbook-ai/plainbook/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["plainbook*"]
 
 [tool.setuptools.package-data]
-plainbook = ["js/*", "css/**/*", "views/*", "images/*"]
+plainbook = ["js/**/*", "css/**/*", "views/*", "images/*"]
 
 [tool.setuptools.exclude-package-data]
 plainbook = ["css/node_modules/**/*", "css/package-lock.json", "css/package.json"]

@@ -22,12 +22,15 @@
         flex-direction: column;
         height: 100vh; /* Full viewport height */
     }
+
     /* The scrollable area */
     .notebook-area {
         flex-grow: 1;      /* Take up all remaining space */
         overflow-y: auto;  /* Scroll only this div */
         padding-bottom: 70vh; /* Extra space so last cell can scroll to top */
+        min-width: 0;
     }
+
     </style>
   </head>
   <body>
@@ -43,6 +46,7 @@
         :has-notebook="!!notebook"
         :up-to-date="notebook && last_valid_output_cell_index >= notebook.cells.length - 1"
         :cell-count="notebook ? notebook.cells.length : 0"
+        :test-cell-count="notebook ? notebook.cells.filter(c => c.cell_type === 'test').length : 0"
         :has-api-key="availableAiProviders.length > 0"
         :debug="debug"
         :active-ai-provider="activeAiProvider"
@@ -54,6 +58,7 @@
         :restarting="restarting"
         :log-enabled="logEnabled"
         :logview-enabled="logviewEnabled"
+        :chromeless="chromeless"
         :auth-token="authToken"
         :submitting="submitting"
         :last-submitted-at-label="lastSubmittedAtLabel"
@@ -67,6 +72,9 @@
         @run-all="ui_runCell(notebook.cells.length - 1)"
         @clear-outputs="clearOutputs"
         @open-info="showInfo = true"
+        @new-notebook="openNewNotebook"
+        @copy-notebook="openCopyNotebook"
+        @open-notebook="openExistingNotebook"
         @open-settings="showSettings = true"
         @debug-request="sendDebugRequest"
         @reset-tokens="resetTokens"
@@ -77,134 +85,170 @@
         @submit-study="submitStudy"
     />
 
-    <panel-bar
-        v-if="!isUserStudy"
-        :auth-token="authToken"
-        :verification="notebook?.metadata?.verification"
-        @dismiss-verification="dismissVerification"
-    />
-
     <ui-error 
         :error="uiError" 
         @close="closeUiError" 
     />
 
-    <unit-test-view
-        v-if="unitTestTargetIndex !== null"
-        :notebook="notebook"
-        :target-cell-index="unitTestTargetIndex"
-        :auth-token="authToken"
-        :running="running"
-        :running-activity="runningActivity"
-        :is-locked="isLocked"
-        :last-valid-code-cell-index="last_valid_code_cell_index"
-        :last-valid-output-cell-index="last_valid_output_cell_index"
-        :unit-test-validity="unitTestValidity"
-        v-model:active-sub-cell="unitTestActiveSubcell"
-        v-model:active-test-name="unitTestActiveTestName"
-        @exit="exitUnitTestMode"
-        @add-unit-test="addUnitTest"
-        @delete-unit-test="deleteUnitTest"
-        @rename-unit-test="renameUnitTest"
-        @save-unit-test-explanation="saveUnitTestExplanation"
-        @save-unit-test-code="saveUnitTestCode"
-        @clear-unit-test-code="clearUnitTestCode"
-        @clear-unit-test-outputs="clearUnitTestOutputs"
-        @run-unit-test="ui_runUnitTest"
-        @run-unit-test-subcell="ui_runUnitTestSubcell"
-        @generate-unit-test-code="generateUnitTestCode"
-        @validate-unit-test-code="ui_validateUnitTestCode"
-        @dismiss-unit-test-validation="dismissUnitTestValidation"
-        @save-explanation="(content) => sendExplanationToServer(content, unitTestTargetIndex)"
-        @save-code="(content) => sendCodeToServer(content, unitTestTargetIndex)"
-        @gencode="ui_forceRegenerateCellCode(unitTestTargetIndex)"
-        @clearcode="clearCellCode(unitTestTargetIndex)"
-        @validate="ui_validateCode(unitTestTargetIndex)"
-        @dismiss-validation="dismissValidation(unitTestTargetIndex)"
-        @interrupt="ui_interruptKernel"
-    />
+    <div class="notebook-workspace">
+        <side-index
+            :cells="notebook?.cells || []"
+            :is-open="tocOpen"
+            @toggle="tocOpen = !tocOpen"
+        />
+        <div class="notebook-main">
+            <panel-bar
+                v-if="!isUserStudy"
+                :auth-token="authToken"
+                :verification="notebook?.metadata?.verification"
+                @dismiss-verification="dismissVerification"
+            />
 
-    <div v-else class="section notebook-area">
-        <h1 class="title">
-            {{ notebook_name }}
-        </h1>
-        <div class="notebook-container px-2 py-2">
-            <div v-if="loading" class="has-text-centered py-6">
-                <button class="button is-loading is-ghost is-large">Loading</button>
-                <p class="has-text-grey">Fetching notebook data...</p>
-            </div>
-            <div v-else-if="error" class="notification is-danger is-light">
-                <button class="delete" @click="error = null"></button>
-                <strong>Error:</strong> {{ error }}
-            </div>
-            <div v-else="notebook">
+            <unit-test-view
+                v-if="unitTestTargetIndex !== null"
+                :notebook="notebook"
+                :target-cell-index="unitTestTargetIndex"
+                :auth-token="authToken"
+                :running="running"
+                :running-activity="runningActivity"
+                :is-locked="isLocked"
+                :last-valid-code-cell-index="last_valid_code_cell_index"
+                :last-valid-output-cell-index="last_valid_output_cell_index"
+                :unit-test-validity="unitTestValidity"
+                v-model:active-sub-cell="unitTestActiveSubcell"
+                v-model:active-test-name="unitTestActiveTestName"
+                @exit="exitUnitTestMode"
+                @add-unit-test="addUnitTest"
+                @delete-unit-test="deleteUnitTest"
+                @rename-unit-test="renameUnitTest"
+                @save-unit-test-explanation="saveUnitTestExplanation"
+                @save-unit-test-code="saveUnitTestCode"
+                @clear-unit-test-code="clearUnitTestCode"
+                @clear-unit-test-outputs="clearUnitTestOutputs"
+                @run-unit-test="ui_runUnitTest"
+                @run-unit-test-subcell="ui_runUnitTestSubcell"
+                @generate-unit-test-code="generateUnitTestCode"
+                @validate-unit-test-code="ui_validateUnitTestCode"
+                @dismiss-unit-test-validation="dismissUnitTestValidation"
+                @save-explanation="(content) => sendExplanationToServer(content, unitTestTargetIndex)"
+                @save-code="(content) => sendCodeToServer(content, unitTestTargetIndex)"
+                @gencode="ui_forceRegenerateCellCode(unitTestTargetIndex)"
+                @clearcode="clearCellCode(unitTestTargetIndex)"
+                @validate="ui_validateCode(unitTestTargetIndex)"
+                @dismiss-validation="dismissValidation(unitTestTargetIndex)"
+                @interrupt="ui_interruptKernel"
+            />
 
-                <template v-for="(cell, index) in notebook.cells" :key="index">
+            <div v-else class="section notebook-area">
+            <notebook-title
+                :name="notebook_name"
+                :is-locked="isLocked || isUserStudy"
+                @rename="renameNotebook" />
+            <div class="notebook-container px-2 py-2">
+                <div v-if="loading" class="has-text-centered py-6">
+                    <button class="button is-loading is-ghost is-large">Loading</button>
+                    <p class="has-text-grey">Fetching notebook data...</p>
+                </div>
+                <div v-else-if="error" class="notification is-danger is-light">
+                    <button class="delete" @click="error = null"></button>
+                    <strong>Error:</strong> {{ error }}
+                </div>
+                <div v-else="notebook">
+
+                    <!-- No API key and no local model: say so here, where the user
+                         is looking, rather than waiting for them to try an AI
+                         action and hit an error. Clears itself once a provider is
+                         configured, in this session, with no reload. -->
+                    <ai-setup-banner v-if="!activeAiProvider" @open-settings="showSettings = true" />
+
+                    <template v-for="(cell, index) in notebook.cells" :key="index">
+
+                        <!-- Inserts above the cell. Suppressed while the notebook has
+                             a single cell, so the only way to add a second one is
+                             below it: newcomers otherwise build the notebook in the
+                             reverse of execution order. -->
+                        <cell-insertion-zone v-if="!isLocked && notebook.cells.length > 1"
+                            :is-active="activeIndex === index || (activeIndex >= 0 && activeIndex === index - 1)"
+                            :cell-count="notebook.cells.length"
+                            @insert="(celltype) => insertCell(index, celltype)"
+                        />
+
+                        <cell-label
+                            v-if="cell.cell_type === 'code'"
+                            :name="cell.metadata.name"
+                        />
+
+                        <notebook-cell
+                            :cell="cell"
+                            :is-active="activeIndex === index"
+                            :is-locked="isLocked"
+                            :running="running"
+                            :code-valid="last_valid_code_cell_index >= index"
+                            :output-valid="last_valid_output_cell_index >= index"
+                            :executed="last_executed_cell_index >= index"
+                            :test-code-valid="last_valid_test_cell_index >= index"
+                            :as-read="asRead"
+                            :markdown-edit-key="markdownEditKey[index]"
+                            :explanation-edit-key="explanationEditKey[index]"
+                            :module-install="moduleInstall[index]"
+                            :clarify-state="clarifyState[index]"
+                            :fold-state="foldState[index]"
+                            @activate="setActiveCell(index)"
+
+                            @save-markdown="(content) => sendMarkdownToServer(content, index)"
+                            @save-explanation="(content) => sendExplanationToServer(content, index)"
+                            @save-code="(content) => sendCodeToServer(content, index)"
+                            @save-and-run="(content) => ui_saveExplanationAndRun(content, index)"
+                            @save-code-and-run="(content) => ui_saveCodeAndRun(content, index)"
+                            @save-code-and-run-test="(content) => ui_saveCodeAndRunTest(content, index)"
+
+                            @interrupt="ui_interruptKernel"
+                            @run-cell="ui_runCell(index, $event)"
+                            @generate-code="ui_forceRegenerateCellCode(index, $event)"
+                            @clear-code="clearCellCode(index)"
+                            @validate-code="ui_validateCode(index)"
+                            @explain-code="ui_explainCode(index)"
+                            @dismiss-validation="dismissValidation(index)"
+                            @install-module="(module) => ui_installModule(index, module)"
+                            @dismiss-module-install="dismissModuleInstall(index)"
+
+                            @submit-clarification="(answers) => ui_submitClarification(index, answers)"
+                            @dismiss-clarification="dismissClarify(index)"
+
+                            @amend-and-fold="(text) => ui_amendAndFold(index, text)"
+                            @accept-amend="(text) => ui_acceptAmend(index, text)"
+                            @save-amend="(text) => ui_saveAmend(index, text)"
+                            @dismiss-fold="dismissFold(index)"
+                            @unfold="ui_unfold(index)"
+
+                            @run-test="ui_runTestCell(index)"
+                            @save-and-run-test="(content) => ui_saveExplanationAndRunTest(content, index)"
+                            @generate-test-code="ui_forceRegenerateTestCode(index)"
+                            @open-test-help="showTestHelp = true"
+
+                            @open-unit-test="enterUnitTestMode(index)"
+
+                            @delete="deleteCell(index)"
+                            @move-up="moveCell(index, -1)"
+                            @move-down="moveCell(index, 1)"
+                            @dismiss-error="closeUiError"
+                        />
+
+                    </template>
 
                     <cell-insertion-zone v-if="!isLocked"
-                        :is-active="activeIndex === index || (activeIndex >= 0 && activeIndex === index - 1)"
+                        :is-active="(activeIndex === -1 && notebook.cells.length === 0) || activeIndex === notebook.cells.length - 1"
                         :cell-count="notebook.cells.length"
-                        @insert="(celltype) => insertCell(index, celltype)"
+                        @insert="(celltype) => insertCell(notebook.cells.length, celltype)"
                     />
 
-                    <cell-label
-                        v-if="cell.cell_type === 'code'"
-                        :name="cell.metadata.name"
-                    />
+                    <div class="box" style="margin-top: 6rem;" v-if="notebook.cells.length === 0 && !loading">
+                        <h1 class="title is-4 has-text-centered">Getting Started</h1>
+                        <notebook-help />
+                    </div>
 
-                    <notebook-cell
-                        :cell="cell"
-                        :is-active="activeIndex === index"
-                        :is-locked="isLocked"
-                        :running="running"
-                        :code-valid="last_valid_code_cell_index >= index"
-                        :output-valid="last_valid_output_cell_index >= index"
-                        :executed="last_executed_cell_index >= index"
-                        :test-code-valid="last_valid_test_cell_index >= index"
-                        :as-read="asRead"
-                        :markdown-edit-key="markdownEditKey[index]"
-                        :explanation-edit-key="explanationEditKey[index]"
-                        @activate="setActiveCell(index)"
-
-                        @save-markdown="(content) => sendMarkdownToServer(content, index)"
-                        @save-explanation="(content) => sendExplanationToServer(content, index)"
-                        @save-code="(content) => sendCodeToServer(content, index)"
-                        @save-and-run="(content) => ui_saveExplanationAndRun(content, index)"
-                        @save-code-and-run="(content) => ui_saveCodeAndRun(content, index)"
-                        @save-code-and-run-test="(content) => ui_saveCodeAndRunTest(content, index)"
-
-                        @interrupt="ui_interruptKernel"
-                        @run-cell="ui_runCell(index)"
-                        @generate-code="ui_forceRegenerateCellCode(index)"
-                        @clear-code="clearCellCode(index)"
-                        @validate-code="ui_validateCode(index)"
-                        @dismiss-validation="dismissValidation(index)"
-
-                        @run-test="ui_runTestCell(index)"
-                        @save-and-run-test="(content) => ui_saveExplanationAndRunTest(content, index)"
-                        @generate-test-code="ui_forceRegenerateTestCode(index)"
-                        @open-test-help="showTestHelp = true"
-
-                        @open-unit-test="enterUnitTestMode(index)"
-
-                        @delete="deleteCell(index)"
-                        @move-up="moveCell(index, -1)"
-                        @move-down="moveCell(index, 1)"
-                    />
-
-                </template>
-
-                <cell-insertion-zone v-if="!isLocked"
-                    :is-active="(activeIndex === -1 && notebook.cells.length === 0) || activeIndex === notebook.cells.length - 1"
-                    :cell-count="notebook.cells.length"
-                    @insert="(celltype) => insertCell(notebook.cells.length, celltype)"
-                />
-
-                <div class="box" style="margin-top: 6rem;" v-if="notebook.cells.length === 0 && !loading">
-                    <h1 class="title is-4 has-text-centered">Getting Started</h1>
-                    <notebook-help />
                 </div>
-
+            </div>
             </div>
         </div>
     </div>
@@ -215,7 +259,16 @@
         :is-codespace="isCodespace"
         :has-gemini-key="hasGeminiKey"
         :has-claude-key="hasClaudeKey"
+        :has-openai-key="hasOpenaiKey"
         :claude-via-bedrock="claudeViaBedrock"
+        :ask-questions="askQuestions"
+        :skip-regeneration="skipRegeneration"
+        :explanation-detail="explanationDetail"
+        :explanation-bullets="explanationBullets"
+        :explanation-latex="explanationLatex"
+        :fix-error-amends-description="fixErrorAmendsDescription"
+        :auth-token="authToken"
+        @providers-changed="onProvidersChanged"
         @close="showSettings = false"
         @save="(keys) => {showSettings = false; saveSettings(keys); }"
     />
@@ -229,6 +282,16 @@
         :is-active="showTestHelp"
         @close="showTestHelp = false"
     />
+    <!-- New / Copy / Open Plainbook Modal -->
+    <notebook-file-modal
+        :is-active="showNewNotebook"
+        :start-folder="newNotebookFolder"
+        :mode="notebookModalMode"
+        :default-name="notebookModalDefaultName"
+        :auth-token="authToken"
+        @close="showNewNotebook = false"
+        @submit="submitNotebookDialog"
+    />
 
     </script>
     
@@ -237,6 +300,23 @@
   <script src="js/prism.min.js"></script>
   <script src="js/prism-python.min.js"></script>
   <script src="js/markdown-it.min.js"></script>
+  <script>
+    // MathJax is served locally (see js/mathjax/README.md).  Only the \( \) and
+    // \[ \] delimiters are recognised: js/markdown.js decides what is math in
+    // the Markdown and emits those, so a stray "$" in prose is never typeset.
+    // Vue renders incrementally, so typesetting is done per element by the
+    // v-mathjax directive rather than for the whole page at startup.  The
+    // context menu is off because its accessibility explorer loads from a CDN.
+    window.MathJax = {
+      tex: { inlineMath: [['\\(', '\\)']], displayMath: [['\\[', '\\]']] },
+      options: {
+        enableMenu: false,
+        skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'],
+      },
+      startup: { typeset: false },
+    };
+  </script>
+  <script src="js/mathjax/tex-svg-full.js" async></script>
   <script type="module" src="js/nb.js"></script>
 </html>
 

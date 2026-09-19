@@ -7,7 +7,7 @@ const NotebookHelp = {
                     <li><strong>Action cells:</strong> Describe what you want to do; Plainbook will generate and execute the code for you.</li>
                     <li><strong>Comment cells:</strong> You can use markdown to write comments and explanations.</li>
                 </ul>
-                <p><strong>You need at least one AI API key to use Plainbook</strong>, which you can set in the settings menu.</p>
+                <p><strong>Plainbook needs an AI model to generate and validate code.</strong> In the settings menu you can either set up a local model, which is free and private, or add an API key for Gemini, Claude or OpenAI.</p>
 
                 <h2 class="title is-4">Working with Action Cells</h2>
                 <ul>
@@ -16,7 +16,7 @@ const NotebookHelp = {
                     <li><strong>Regenerate Code:</strong> Ask AI to generate or fix code based on your description.</li>
                     <li><strong>Validate Code:</strong> Check if the generated code matches your description. You can use one AI
                     to check on the work of another.</li>
-                    <li><strong>Move and Delete:</strong> Use arrow buttons to reorder cells, and tehhe trash icon to delete them.</li>
+                    <li><strong>Move and Delete:</strong> Use arrow buttons to reorder cells, and the trash icon to delete them.</li>
                 </ul>
                 <p><strong>Execution order:</strong> Unlike in Jupyter Notebooks, cells are always guaranteed to be executed in order, starting from the beginning.
                 If you click "Run" on a cell, all preceding cells will be executed first to ensure that the notebook 
@@ -41,7 +41,8 @@ const NotebookHelp = {
                 If you are working with sensitive data, you may not want to share the cell outputs with AI. 
                 Sharing the outputs with AI helps generate better code, and is the default setting for a notebook.</li>
                 <li class="mb-2"><button class="button is-small is-light"><i class="bx bx-light-bulb"></i></button> 
-                This dropdown allows you to switch between different AI models.</li>
+                This dropdown allows you to switch between different AI models, including a
+                model running on your own computer once you set one up in Settings (no API key needed).</li>
                 </ul>
                 
 

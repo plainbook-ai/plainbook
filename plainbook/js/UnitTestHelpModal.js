@@ -13,13 +13,15 @@ export default {
                 <div class="help-container p-5">
                     <div class="content">
                         <p>
-                        The cell being tested is copied here as the <em>Target Cell</em>. 
-                        Testing it consists of three steps: 
+                        The cell being tested is copied here as the <em>Target Cell</em>.
+                        Testing it consists of three steps:
+                        </p>
                         <ul>
                         <li><b>First</b>, in the <em>Data Preparation</em> cell, you prepare the data used to test the target cell.
                             <ul>
                             <li>Typically, you want to prepare some simple data, so you can make sense of it.</li>
-                            <li>You can also prepare inputs that test edge cases, such as missing values, ties, etc. 
+                            <li>You can also prepare inputs that test edge cases, such as missing values, ties, etc.
+                            </li>
                             </ul>
                         Just describe the data you want in English. 
                         Plainbook knows what the target cell needs, so it can create the right data for it.
@@ -28,7 +30,6 @@ export default {
                         <li class="mt-4"><b>Second</b>, the target cell is run.</li>
                         <li class="mt-4"><b>Finally</b>, you can visually inspect the results or use the Test Cell to define specific output checks. </li>
                         </ul>
-                        </p>
                     </div>
                 </div>
             </section>

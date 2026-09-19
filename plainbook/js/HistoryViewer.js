@@ -1,11 +1,13 @@
 import { createApp, ref, computed, onMounted } from './vue.esm-browser.js';
+import { mathjaxDirective } from './markdown.js';
 
 import HistoryCellView from './HistoryCellView.js';
 import HistoryTimeline from './HistoryTimeline.js';
 import HistoryEntryPanel from './HistoryEntryPanel.js';
 import { replay } from './HistoryReplay.js';
+import { serverFetch } from './serverFetch.js';
 
-createApp({
+const app = createApp({
     components: { HistoryCellView, HistoryTimeline, HistoryEntryPanel },
     setup() {
         const urlParams = new URLSearchParams(window.location.search);
@@ -38,7 +40,7 @@ createApp({
 
         const fetchData = async () => {
             try {
-                const res = await fetch(`/get_notebook?token=${authToken}`);
+                const res = await serverFetch(`/get_notebook?token=${authToken}`);
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const r = await res.json();
                 const nb = r.nb;
@@ -129,4 +131,6 @@ createApp({
             </template>
         </div>
     `,
-}).mount('#log-view-app');
+});
+app.directive('mathjax', mathjaxDirective);
+app.mount('#log-view-app');
