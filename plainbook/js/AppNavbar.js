@@ -269,7 +269,11 @@ export default {
                             <span class="icon"><i class="bx bx-bug"></i></span>
                             <span>Debug</span>
                         </button>
-                        <button class="button" :class="shareOutputWithAi ? 'is-success' : 'is-light'"
+                        <!-- Orange while outputs go to the AI, green once they do
+                             not: the colour tracks how exposed the data is, so
+                             green agrees with the check on the shield rather than
+                             signalling "this feature is on". -->
+                        <button class="button" :class="shareOutputWithAi ? 'is-warning' : 'is-success'"
                                 @click="$emit('toggle-share-output')"
                                 :title="shareOutputWithAi ? 'Cell outputs are shared with AI (click to disable)' : 'Cell outputs are NOT shared with AI (click to enable)'">
                             <span class="icon">

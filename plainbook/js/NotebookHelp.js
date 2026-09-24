@@ -36,8 +36,9 @@ const NotebookHelp = {
                 Run all cells (except tests).</li>
                 <li class="mb-2"><button class="button is-small is-warning"><i class="bx bx-seal-check"></i></button> 
                 Run all tests.  Tests are not run when you run the notebook.</li>
-                <li class="mb-2"><button class="button is-small is-success"><i class="bx bx-shield"></i></button> 
-                Toggles whether cell output is shared with AI (check not shown) or not (check shown).  
+                <li class="mb-2"><button class="button is-small is-warning"><i class="bx bx-shield"></i></button>
+                <button class="button is-small is-success"><i class="bx bx-check-shield"></i></button>
+                Toggles whether cell output is shared with AI (orange, plain shield) or not (green, shield with a check).
                 If you are working with sensitive data, you may not want to share the cell outputs with AI. 
                 Sharing the outputs with AI helps generate better code, and is the default setting for a notebook.</li>
                 <li class="mb-2"><button class="button is-small is-light"><i class="bx bx-light-bulb"></i></button> 

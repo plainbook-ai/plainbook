@@ -1893,7 +1893,18 @@ const app = createApp({
             }
         };
 
+        // Deactivates the active cell when a click lands outside the notebook.
+        // Membership is decided by DOM containment, so it needs a guard for a
+        // target that is no longer in the document: several controls inside a
+        // cell remove themselves when clicked (CodeCell's "Edit Code" button
+        // disappears behind its own v-if as soon as isEditing flips), and if Vue
+        // has flushed that update before this window-level listener runs, the
+        // target arrives detached. A detached node is contained by nothing, so
+        // the click would read as "outside" and deactivate the very cell the user
+        // just asked to edit. A vanished target never means "clicked outside",
+        // whatever the ordering, so ignore it.
         const handleClickOutside = (event) => {
+            if (!event.target.isConnected) return;
             if (event.target.closest('.modal')) return;
             const container = document.querySelector('.notebook-container');
             const navbar = document.querySelector('.app-toolbar');

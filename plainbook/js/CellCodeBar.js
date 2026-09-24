@@ -73,7 +73,7 @@ export default {
                         title="Clear code"
                         :disabled="isLocked || !hasCode" @click.stop="$emit('clearcode')">
                     <span class="icon"><i class="bx bx-eraser"></i></span>
-                    <span>Clear</span>
+                    <span>Clear code</span>
                 </button>
                 <!-- On error/warning there is no Generate button here: the red
                      "Fix Code" button in the description toolbar takes over. -->
@@ -95,7 +95,13 @@ export default {
                     <span class="icon"><i class="bx bx-stop-circle"></i></span>
                     <span>Stop validation</span>
                 </button>
-                <button v-else :disabled="running || !codeValid" class="button is-small"
+                <!-- Same enabling condition as Explain below: both read the code
+                     that is there without changing it, so if one can run on this
+                     cell the other can. Validate used to additionally require
+                     codeValid, which disabled it exactly when the code was stale
+                     -- the case where checking it against the description is most
+                     worth doing. -->
+                <button v-else :disabled="running || isLocked || !hasCode" class="button is-small"
                         title="Validate code against description" @click.stop="onValidate">
                     <span class="icon"><i class="bx bx-check"></i></span><span>Validate</span>
                 </button>
