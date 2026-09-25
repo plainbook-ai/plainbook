@@ -112,6 +112,15 @@ OP_LOG_CONFIG = {
     "set_files": {"snapshot": False, "truncate_param_fields": {"files": 4096, "missing_files": 4096}},
     "set_ai_instructions": {"snapshot": False, "truncate_param_fields": {"ai_instructions": 4096}},
     "reset_tokens": {"snapshot": False},
+    # Renaming saves the notebook under a new name and moves all later edits to
+    # that copy, so it belongs in the record; it also has to carry @logged to be
+    # refused in --logview mode, which is the only mutation guard there is.
+    "rename_notebook": {"snapshot": False},
+    # install_package returns pip's whole stdout, which runs to tens of KB for a
+    # package with dependencies and would otherwise go into the notebook verbatim.
+    "install_package": {"snapshot": False, "truncate_result_fields": {"output": 4096}},
+    "verify_notebook": {"snapshot": False, "truncate_result_fields": {"verification": 8192}},
+    "set_verification_visibility": {"snapshot": False},
 }
 
 

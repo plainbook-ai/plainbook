@@ -842,6 +842,7 @@ def get_notebook_state():
     return {}
 
 @post('/rename_notebook')
+@action_log.logged('rename_notebook')
 @stateful
 @require_token
 def rename_notebook():

@@ -4,6 +4,8 @@ import { opColor } from './HistoryReplay.js';
 const LANE_COUNT = 6;
 const LANE_LABELS = ['structural', 'edits', 'execute', 'AI', 'settings', 'active cell'];
 
+const AMEND_OPS = new Set(['propose_amend', 'commit_amend', 'unfold']);
+
 const UNIT_TEST_EDIT_OPS = new Set([
     'save_unit_tests',
     'save_unit_test_explanation',
@@ -17,6 +19,12 @@ function opLane(op, isClient) {
     if (op === 'insert_cell' || op === 'delete_cell' || op === 'move_cell') return 0;
     if (op.startsWith('edit_') || op === 'clear_code') return 1;
     if (UNIT_TEST_EDIT_OPS.has(op)) return 1;
+    // The amend family edits a cell's description, so it belongs beside the
+    // other description changes rather than in the catch-all "settings" lane.
+    // propose_amend goes here too although it commits nothing: what the user
+    // typed is the interesting part, and it reads as one story with the
+    // commit_amend that follows it.
+    if (AMEND_OPS.has(op)) return 1;
     if (op.startsWith('execute_') || op === 'run_unit_test_cell') return 2;
     if (op.startsWith('generate_') || op.startsWith('validate_')) return 3;
     return 4;
