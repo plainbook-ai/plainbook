@@ -11,6 +11,7 @@ const MUTATING_OPS = new Set([
     'save_unit_tests', 'save_unit_test_explanation', 'save_unit_test_code',
     'clear_unit_test_code', 'clear_unit_test_outputs',
     'set_validation_visibility', 'set_unit_test_validation_visibility',
+    'commit_amend', 'unfold', 'explain_code', 'clear_outputs',
 ]);
 
 function cloneCell(c) {
@@ -46,6 +47,26 @@ function materializeErrorOutputs(snapshot) {
         });
     }
     return outputs;
+}
+
+// Returns tests[testName].cells[role] for a cell, creating the chain if the
+// log starts mid-story (a test created before the initial snapshot). Returns
+// null when the entry does not name a sub-cell.
+const UNIT_TEST_ROLES = new Set(['setup', 'target', 'test']);
+
+function unitTestSubCell(cell, testName, role) {
+    if (!cell || !testName || !UNIT_TEST_ROLES.has(role)) return null;
+    cell.metadata = cell.metadata || {};
+    cell.metadata.unit_tests = cell.metadata.unit_tests || {};
+    const tests = cell.metadata.unit_tests;
+    if (!tests[testName]) {
+        tests[testName] = { cells: { setup: { source: '', metadata: {} }, test: { source: '', metadata: {} } } };
+    }
+    tests[testName].cells = tests[testName].cells || {};
+    tests[testName].cells[role] = tests[testName].cells[role] || { source: '', metadata: {} };
+    const sub = tests[testName].cells[role];
+    sub.metadata = sub.metadata || {};
+    return sub;
 }
 
 function applyEntry(cells, entry, state) {
@@ -108,6 +129,17 @@ function applyEntry(cells, entry, state) {
         }
         case 'run_unit_test_cell': {
             if (entry.cell_id) state.lastExecutedByCellId[entry.cell_id] = entry.ts_server;
+            // Record the outcome on the sub-cell that ran. Failure is carried by
+            // result.details (the route's outputs are dropped from the log), and
+            // the traceback by cell_snapshot, which for these ops describes the
+            // sub-cell rather than the cell the test hangs off.
+            const sub = unitTestSubCell(cells[idx], params.test_name, params.role);
+            if (sub) {
+                const failed = (result && result.details === 'CellExecutionError')
+                    || !!(snap && snap.error);
+                sub.metadata.last_run = { failed, ts: entry.ts_server };
+                sub.outputs = materializeErrorOutputs(snap);
+            }
             break;
         }
         case 'generate_code':
@@ -141,20 +173,11 @@ function applyEntry(cells, entry, state) {
         case 'save_unit_test_code':
         case 'clear_unit_test_code':
         case 'generate_unit_test_cell_code': {
-            if (!cells[idx]) break;
-            cells[idx].metadata = cells[idx].metadata || {};
-            cells[idx].metadata.unit_tests = cells[idx].metadata.unit_tests || {};
-            const testName = params.test_name;
-            const role = params.role;
-            if (!testName || (role !== 'setup' && role !== 'test')) break;
-            const tests = cells[idx].metadata.unit_tests;
-            if (!tests[testName]) {
-                tests[testName] = { cells: { setup: { source: '', metadata: {} }, test: { source: '', metadata: {} } } };
-            }
-            tests[testName].cells = tests[testName].cells || {};
-            tests[testName].cells[role] = tests[testName].cells[role] || { source: '', metadata: {} };
-            const sub = tests[testName].cells[role];
-            sub.metadata = sub.metadata || {};
+            // target has no stored source of its own -- it is the cell's own
+            // code -- so these edit ops only ever apply to setup and test.
+            if (params.role !== 'setup' && params.role !== 'test') break;
+            const sub = unitTestSubCell(cells[idx], params.test_name, params.role);
+            if (!sub) break;
             if (op === 'save_unit_test_explanation') {
                 sub.metadata.explanation = params.explanation ?? '';
             } else if (op === 'save_unit_test_code') {
@@ -164,6 +187,85 @@ function applyEntry(cells, entry, state) {
             } else if (op === 'generate_unit_test_cell_code') {
                 if (result && result.status === 'success' && typeof result.code === 'string') {
                     sub.source = result.code;
+                }
+            }
+            break;
+        }
+        // ── Description amendments (the fold/unfold pair) ──
+        case 'commit_amend': {
+            // Installs the amended description over the old one. Without this the
+            // replayed cell kept showing the pre-amend text for the rest of the
+            // session, and the later regenerate looked unmotivated.
+            if (cells[idx] && typeof params.explanation === 'string') {
+                cells[idx].metadata = cells[idx].metadata || {};
+                cells[idx].metadata.explanation = params.explanation;
+                // Marker only; the real snapshot is server-side. It is what makes
+                // the cell offer Unfold, so the replayed cell should show it too.
+                cells[idx].metadata.explanation_prefold = { committed: true };
+            }
+            break;
+        }
+        case 'unfold': {
+            // Restores the pair commit_amend replaced. The result carries both
+            // halves; source is null for pre-redesign snapshots that saved only
+            // the description.
+            if (cells[idx] && result && result.status === 'success') {
+                cells[idx].metadata = cells[idx].metadata || {};
+                if (typeof result.explanation === 'string') {
+                    cells[idx].metadata.explanation = result.explanation;
+                }
+                if (typeof result.source === 'string') {
+                    cells[idx].source = result.source;
+                }
+                delete cells[idx].metadata.explanation_prefold;
+            }
+            break;
+        }
+        case 'explain_code': {
+            // Stored separately from the user's description, so it does not
+            // overwrite it (plainbook.py explain_code_cell).
+            if (cells[idx] && result && typeof result.explanation === 'string') {
+                cells[idx].metadata = cells[idx].metadata || {};
+                cells[idx].metadata.ai_code_explanation = result.explanation;
+            }
+            break;
+        }
+        case 'clear_outputs': {
+            // Replay only ever materializes error outputs, but they must go when
+            // the user cleared them, or a fixed error appears to linger.
+            for (const c of cells) c.outputs = [];
+            break;
+        }
+        // ── Unit-test sub-cell ops that were listed as mutating but never applied ──
+        case 'validate_unit_test_code': {
+            if (params.role === 'target') {
+                // The target is an ordinary action cell; the server delegates to
+                // validate_code_cell, so the verdict lands on the cell itself.
+                if (cells[idx] && result && result.validation) {
+                    cells[idx].metadata = cells[idx].metadata || {};
+                    cells[idx].metadata.validation = result.validation;
+                }
+                break;
+            }
+            const sub = unitTestSubCell(cells[idx], params.test_name, params.role);
+            if (sub && result && result.validation) sub.metadata.validation = result.validation;
+            break;
+        }
+        case 'set_unit_test_validation_visibility': {
+            const sub = unitTestSubCell(cells[idx], params.test_name, params.role);
+            if (sub) {
+                sub.metadata.validation = sub.metadata.validation || {};
+                sub.metadata.validation.is_hidden = !!params.is_hidden;
+            }
+            break;
+        }
+        case 'clear_unit_test_outputs': {
+            const test = cells[idx] && cells[idx].metadata
+                && cells[idx].metadata.unit_tests
+                && cells[idx].metadata.unit_tests[params.test_name];
+            if (test && test.cells) {
+                for (const role of Object.keys(test.cells)) {
+                    if (test.cells[role]) test.cells[role].outputs = [];
                 }
             }
             break;
@@ -183,6 +285,11 @@ export function replay(initialState, log, uptoIndex) {
         activeAiProvider: initialMeta.active_ai_provider || null,
         isLocked: !!initialMeta.is_locked,
         shareOutputWithAi: initialMeta.share_output_with_ai !== false,
+        verification: initialMeta.verification || null,
+        aiInstructions: initialMeta.ai_instructions || '',
+        inputFiles: initialMeta.input_files || [],
+        missingInputFiles: initialMeta.missing_input_files || [],
+        notebookName: initialMeta.name || null,
     };
     const limit = Math.min(uptoIndex, log.length - 1);
     for (let i = 0; i <= limit; i++) {
@@ -209,6 +316,33 @@ export function replay(initialState, log, uptoIndex) {
                 state.shareOutputWithAi = !!p.share;
                 continue;
             }
+            // Notebook-level state. Verification, instructions and the input
+            // file list all live in notebook metadata rather than on a cell, so
+            // they need tracking here the way isLocked does.
+            if (entry.op === 'verify_notebook') {
+                const r = entry.result || {};
+                if (r.status === 'success' && r.verification) state.verification = r.verification;
+                continue;
+            }
+            if (entry.op === 'set_verification_visibility') {
+                if (state.verification) state.verification.is_hidden = !!(entry.params || {}).is_hidden;
+                continue;
+            }
+            if (entry.op === 'set_ai_instructions') {
+                state.aiInstructions = (entry.params || {}).ai_instructions ?? '';
+                continue;
+            }
+            if (entry.op === 'set_files') {
+                const p = entry.params || {};
+                state.inputFiles = p.files ?? state.inputFiles;
+                state.missingInputFiles = p.missing_files ?? state.missingInputFiles;
+                continue;
+            }
+            if (entry.op === 'rename_notebook') {
+                const name = (entry.params || {}).name;
+                if (name) state.notebookName = name;
+                continue;
+            }
             try { applyEntry(cells, entry, state); }
             catch (e) { /* swallow; replay is best-effort */ }
         }
@@ -220,6 +354,11 @@ export function replay(initialState, log, uptoIndex) {
         activeAiProvider: state.activeAiProvider,
         isLocked: state.isLocked,
         shareOutputWithAi: state.shareOutputWithAi,
+        verification: state.verification,
+        aiInstructions: state.aiInstructions,
+        inputFiles: state.inputFiles,
+        missingInputFiles: state.missingInputFiles,
+        notebookName: state.notebookName,
     };
 }
 
@@ -237,6 +376,20 @@ export const OP_COLOR = {
     set_ai_instructions: '#f14668', lock_notebook: '#f14668', set_share_output: '#f14668',
     reset_kernel: '#f14668', reset_tokens: '#f14668', interrupt_kernel: '#f14668',
     clear_outputs: '#f14668', cancel_ai_request: '#f14668',
+    // Description amendments: green, like the other edits to a description.
+    propose_amend: '#48c774', commit_amend: '#48c774', unfold: '#48c774',
+    // AI-produced text, like generate_* and validate_*.
+    explain_code: '#b86bff', verify_notebook: '#b86bff',
+    // Validation verdicts being shown or hidden, alongside their cell edits.
+    set_validation_visibility: '#48c774', set_unit_test_validation_visibility: '#48c774',
+    set_verification_visibility: '#48c774',
+    // Settings and session-level actions, like the other red ops.
+    install_package: '#f14668', rename_notebook: '#f14668',
+    new_notebook: '#f14668', copy_notebook: '#f14668', open_notebook: '#f14668',
+    set_ask_questions: '#f14668', set_explain_options: '#f14668',
+    set_skip_regeneration: '#f14668', set_fix_error_amends_description: '#f14668',
+    local_model_setup: '#f14668', local_model_cancel: '#f14668',
+    local_model_select: '#f14668', local_model_remove: '#f14668',
     active_cell_change: '#b5b5b5',
 };
 

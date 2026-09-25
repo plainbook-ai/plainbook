@@ -13,7 +13,7 @@ import { outputsHaveError } from './errorUtils.js';
 export default {
     components: { UnitTestTabBar, UnitTestSubCell, ExplanationEditor, CodeCell, CellCodeBar, ValidationCell, OutputRenderer, CellLabel, UnitTestHelpModal },
     props: ['notebook', 'targetCellIndex', 'authToken', 'running', 'runningActivity',
-            'isLocked', 'lastValidCodeCellIndex', 'lastValidOutputCellIndex', 'unitTestValidity',
+            'isLocked', 'mainLocked', 'lastValidCodeCellIndex', 'lastValidOutputCellIndex', 'unitTestValidity',
             'activeSubCell', 'activeTestName'],
     emits: ['exit',
             'save-unit-tests', 'save-unit-test-explanation', 'save-unit-test-code',
@@ -229,7 +229,7 @@ export default {
                             v-model:source="targetCell.metadata.explanation"
                             :hasCode="(targetCell.source || '').trim().length > 0"
                             :isActive="activeSubCell === 'target'"
-                            :isLocked="isLocked"
+                            :isLocked="mainLocked"
                             :running="running"
                             :asRead="false"
                             :codeValid="targetCodeValid"
@@ -263,7 +263,7 @@ export default {
                         :code-valid="targetCodeValid"
                         :running="running"
                         :has-error="hasTargetError"
-                        :is-locked="isLocked"
+                        :is-locked="mainLocked"
                         :is-test-cell="false"
                         :show-explain="false"
                         :editing="targetDescEditing"
@@ -276,7 +276,7 @@ export default {
                         v-model:source="targetCell.source"
                         :execution-count="targetCell.execution_count"
                         :is-active="activeSubCell === 'target'"
-                        :is-locked="isLocked"
+                        :is-locked="mainLocked"
                         :codeValid="targetCodeValid"
                         :outputValid="targetOutputValid"
                         :executed="false"

@@ -115,7 +115,15 @@ export default {
             if (localIsLocked.value) return;
             isEditing.value = true;
             nextTick(() => {
-                if (textareaEl.value) textareaEl.value.focus();
+                if (!textareaEl.value) return;
+                textareaEl.value.focus();
+                // Start at the top of the code. focus() alone leaves the caret
+                // wherever the textarea last had it, which for freshly rendered
+                // content is the very end -- so a long cell opened scrolled to
+                // its bottom. Entering at a point (double-click) sets its own
+                // position and is unaffected; see enterEditModeAtPoint.
+                textareaEl.value.setSelectionRange(0, 0);
+                textareaEl.value.scrollTop = 0;
             });
         };
 
@@ -153,12 +161,14 @@ export default {
         };
 
         const saveCode = () => {
+            if (localIsLocked.value) return;
             if (!isEditing.value) return;
             isEditing.value = false;
             emit('save', localSource.value);
         };
 
         const saveAndRunCode = () => {
+            if (localIsLocked.value) return;
             if (!isEditing.value) return;
             isEditing.value = false;
             emit('saveandrun', localSource.value);
@@ -212,9 +222,12 @@ export default {
                     <span v-else>Up to date</span>
                 </button>
                 <span style="flex: 1;"></span>
+                <!-- .stop like the description's Edit button in ExplanationEditor:
+                     entering edit mode is handled here, so the click has no
+                     business reaching the window listener that deactivates cells. -->
                 <button v-if="isActive && !collapsed && !isEditing && !localIsLocked"
                     class="button is-small is-info mt-1 mr-3"
-                    @click="enterEditMode">
+                    @click.stop="enterEditMode">
                     <span class="icon"><i class="bx bx-pencil"></i></span>
                     <span>Edit Code</span>
                 </button>

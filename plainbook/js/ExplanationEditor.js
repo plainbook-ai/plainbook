@@ -64,6 +64,7 @@ const ExplanationRenderer = {
         });
 
         const enterEditMode = () => {
+            if (localIsLocked.value) return;
             originalSource.value = localSource.value;
             isEditing.value = true;
             nextTick(() => {
@@ -83,12 +84,14 @@ const ExplanationRenderer = {
         });
 
         const saveChanges = () => {
+            if (localIsLocked.value) return;
             if (!isEditing.value) return;
             isEditing.value = false;
             emit('save', localSource.value);
         };
 
         const saveAndRun = () => {
+            if (localIsLocked.value) return;
             isEditing.value = false;
             emit('saveandrun', localSource.value);
         };
@@ -210,6 +213,7 @@ const ExplanationRenderer = {
             amendText.value = '';
         };
         const submitAmend = () => {
+            if (localIsLocked.value) return;
             const t = amendText.value.trim();
             if (!t) return;
             emit('amend-and-fold', t);
@@ -218,8 +222,8 @@ const ExplanationRenderer = {
         };
         // Backs the Unfold button, which is commented out in the template below.
         // const onUnfold = () => emit('unfold');
-        const acceptFold = () => emit('accept-amend', foldEdit.value);
-        const saveFold = () => emit('save-amend', foldEdit.value);
+        const acceptFold = () => { if (!localIsLocked.value) emit('accept-amend', foldEdit.value); };
+        const saveFold = () => { if (!localIsLocked.value) emit('save-amend', foldEdit.value); };
         const dismissFoldReview = () => emit('dismiss-fold');
         const autoResizeFold = (e) => {
             const el = e.target; el.style.height = 'auto'; el.style.height = `${el.scrollHeight}px`;
@@ -299,10 +303,10 @@ const ExplanationRenderer = {
                 <textarea ref="foldEl" v-model="foldEdit" class="textarea is-family-monospace mb-2" rows="3" @input="autoResizeFold"></textarea>
                 <div class="is-flex is-justify-content-flex-end" style="gap:0.5rem;">
                     <button class="button is-small" @click.stop="dismissFoldReview">Cancel</button>
-                    <button class="button is-small is-info" :disabled="!foldEdit.trim()" @click.stop="saveFold">
+                    <button class="button is-small is-info" :disabled="localIsLocked || !foldEdit.trim()" @click.stop="saveFold">
                         <span>Save</span>
                     </button>
-                    <button class="button is-small is-primary" :disabled="!foldEdit.trim()" @click.stop="acceptFold">
+                    <button class="button is-small is-primary" :disabled="localIsLocked || !foldEdit.trim()" @click.stop="acceptFold">
                         <span class="icon"><i class="bx bx-play"></i></span><span>Save and Run</span>
                     </button>
                 </div>

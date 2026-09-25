@@ -5,7 +5,7 @@ const UNGROUPED_MAJORS = new Set(['local']);
 
 export default {
     props: ['isLocked', 'running', 'restarting', 'submitting', 'lastSubmittedAtLabel', 'isUserStudy', 'runningActivity', 'hasNotebook', 'upToDate', 'cellCount', 'testCellCount', 'hasApiKey', 'debug',
-            'activeAiProvider', 'availableAiProviders', 'shareOutputWithAi', 'aiTokens', 'verification', 'verificationStatus', 'logEnabled', 'logviewEnabled', 'chromeless', 'authToken'],
+            'activeAiProvider', 'availableAiProviders', 'shareOutputWithAi', 'aiTokens', 'verification', 'verificationStatus', 'logEnabled', 'logviewEnabled', 'unitTestsOnly', 'chromeless', 'authToken'],
     emits: [
         'lock', 'refresh', 'interrupt', 'regenerate-all', 'new-notebook', 'copy-notebook',
         'open-notebook',
@@ -109,7 +109,7 @@ export default {
                                  style="height: 1.5em;">
                         </button>
 
-                        <div v-if="!isUserStudy" class="buttons has-addons mb-0" style="display: inline-flex;">
+                        <div v-if="!isUserStudy && !unitTestsOnly" class="buttons has-addons mb-0" style="display: inline-flex;">
                             <button class="button is-light" title="Open an existing plainbook (in its own window)"
                                     @click="$emit('open-notebook')">
                                 <span class="icon"><i class="bx bx-square"></i></span>
@@ -124,10 +124,10 @@ export default {
                             </button>
                         </div>
 
-                        <button v-if="isLocked" class="button is-warning" title="Unlock Notebook" @click="$emit('lock', false)">
+                        <button v-if="isLocked && !unitTestsOnly" class="button is-warning" title="Unlock Notebook" @click="$emit('lock', false)">
                         <span class="icon"><i class="bx bx-lock"></i></span>
                         </button>
-                        <button v-else class="button is-light" title="Lock Notebook" @click="$emit('lock', true)">
+                        <button v-else-if="!unitTestsOnly" class="button is-light" title="Lock Notebook" @click="$emit('lock', true)">
                         <span class="icon"><i class="bx bx-lock-open"></i></span>
                         </button>
 
@@ -252,7 +252,7 @@ export default {
                             <span>Run tests</span>
                         </button>
 
-                        <button v-if="!running && hasNotebook"
+                        <button v-if="!running && hasNotebook && !unitTestsOnly"
                             :disabled="cellCount === 0"
                             @mousedown.prevent
                             @click="$emit('verify-notebook')"
@@ -284,7 +284,11 @@ export default {
                             <span class="icon"><i class="bx bx-bug"></i></span>
                             <span>Debug</span>
                         </button>
-                        <button class="button" :class="shareOutputWithAi ? 'is-success' : 'is-light'"
+                        <!-- Orange while outputs go to the AI, green once they do
+                             not: the colour tracks how exposed the data is, so
+                             green agrees with the check on the shield rather than
+                             signalling "this feature is on". -->
+                        <button class="button" :class="shareOutputWithAi ? 'is-warning' : 'is-success'"
                                 @click="$emit('toggle-share-output')"
                                 :title="shareOutputWithAi ? 'Cell outputs are shared with AI (click to disable)' : 'Cell outputs are NOT shared with AI (click to enable)'">
                             <span class="icon">
@@ -326,7 +330,7 @@ export default {
                                 </div>
                             </div>
                         </div>
-                        <button class="button" :class="hasApiKey ? 'is-light' : 'is-warning'"
+                        <button v-if="!unitTestsOnly" class="button" :class="hasApiKey ? 'is-light' : 'is-warning'"
                                 @click="$emit('open-settings')" title="Settings">
                             <span class="icon"><i :class="hasApiKey ? 'bx bx-cog' : 'bx bx-alert-triangle'"></i></span>
                             <span>Settings</span>

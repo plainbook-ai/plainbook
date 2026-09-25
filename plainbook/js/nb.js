@@ -16,11 +16,12 @@ import NotebookTitle from './NotebookTitle.js';
 import NotebookFileModal from './NotebookFileModal.js';
 import SideIndex from './SideIndex.js';
 import AiSetupBanner from './AiSetupBanner.js';
+import StudyModeBanner from './StudyModeBanner.js';
 import { outputsHaveStoppingError, getErrorInfo } from './errorUtils.js';
 import { serverFetch, isServerDown, SERVER_DOWN_MESSAGE } from './serverFetch.js';
 
 const app = createApp({
-    components: { AppNavbar, NotebookCell, CellInsertionZone, CellLabel, SettingsModal, InfoModal, TestHelpModal, UiError, PanelBar, NotebookHelp, UnitTestView, NotebookTitle, NotebookFileModal, SideIndex, AiSetupBanner },
+    components: { AppNavbar, NotebookCell, CellInsertionZone, CellLabel, SettingsModal, InfoModal, TestHelpModal, UiError, PanelBar, NotebookHelp, UnitTestView, NotebookTitle, NotebookFileModal, SideIndex, AiSetupBanner, StudyModeBanner },
     setup() {
         // Extract token from URL
         const urlParams = new URLSearchParams(window.location.search);
@@ -103,6 +104,12 @@ const app = createApp({
         const claudeViaBedrock = ref(false);
         const logEnabled = ref(false);
         const logviewEnabled = ref(false);
+        // --unit-tests-only / --hide-code: the user-study flags. Enforcement is
+        // entirely server-side (see study_denied in main.py); these only shape
+        // the UI, so a participant meets a control that is not there rather than
+        // one that answers 403.
+        const unitTestsOnly = ref(false);
+        const hideCode = ref(false);
         const printAllEnabled = ref(false);
         // True when the server launched the UI as a chromeless window, which has
         // no browser toolbar; the navbar then offers its own Refresh button.
@@ -139,6 +146,14 @@ const app = createApp({
 
         // Test cell state
         const last_valid_test_cell_index = ref(-1);
+
+        // Read-only for the notebook's own cells. isLocked cannot be reused for
+        // this: it is a superset that also locks the unit-test UI, and it is
+        // overwritten from the server on every response (see updateState), so a
+        // client-side override would not survive. Passed only at the main-cell
+        // call sites -- CellCodeBar, ExplanationEditor and CodeCell are shared
+        // with the unit-test side, so the distinction lives in the template.
+        const mainLocked = computed(() => isLocked.value || unitTestsOnly.value);
 
         // Configure global error handler
         const app = getCurrentInstance().appContext.app;
@@ -379,6 +394,8 @@ const app = createApp({
                 if (r.skip_regeneration !== undefined) skipRegeneration.value = !!r.skip_regeneration;
                 logEnabled.value = !!r.log_enabled;
                 logviewEnabled.value = !!r.logview_enabled;
+                unitTestsOnly.value = !!r.unit_tests_only;
+                hideCode.value = !!r.hide_code;
                 printAllEnabled.value = !!r.print_all_enabled;
                 chromeless.value = !!r.chromeless;
                 document.body.classList.toggle('print-all', printAllEnabled.value);
@@ -2003,7 +2020,18 @@ const app = createApp({
             }
         };
 
+        // Deactivates the active cell when a click lands outside the notebook.
+        // Membership is decided by DOM containment, so it needs a guard for a
+        // target that is no longer in the document: several controls inside a
+        // cell remove themselves when clicked (CodeCell's "Edit Code" button
+        // disappears behind its own v-if as soon as isEditing flips), and if Vue
+        // has flushed that update before this window-level listener runs, the
+        // target arrives detached. A detached node is contained by nothing, so
+        // the click would read as "outside" and deactivate the very cell the user
+        // just asked to edit. A vanished target never means "clicked outside",
+        // whatever the ordering, so ignore it.
         const handleClickOutside = (event) => {
+            if (!event.target.isConnected) return;
             if (event.target.closest('.modal')) return;
             const container = document.querySelector('.notebook-container');
             const navbar = document.querySelector('.app-toolbar');
@@ -2090,6 +2118,7 @@ const app = createApp({
             tocOpen,
             genError, uiError, closeUiError, renameNotebook, debug, sendDebugRequest, resetTokens,
             explanationEditKey, deleteCell, moveCell,
+            mainLocked, unitTestsOnly, hideCode,
             clearOutputs, activeAiProvider, availableAiProviders, setActiveAiProvider, onProvidersChanged, isCodespace, isUserStudy, hasGeminiKey, hasClaudeKey, hasOpenaiKey, claudeViaBedrock, logEnabled, logviewEnabled, printAllEnabled, chromeless, authToken,
             submitting, submitStudy, lastSubmittedAtLabel,
             restarting, ui_restart,

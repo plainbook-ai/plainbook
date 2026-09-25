@@ -215,6 +215,13 @@ mjx-container[display="true"] {
 .panel-tab { border: none; border-radius: 0; border-bottom: 2px solid transparent; text-decoration: none; }
 .panel-tab.is-active { font-weight: 700; border-bottom-color: var(--bulma-primary); color: var(--bulma-primary); }
 .panel-tab:not(.is-active) { color: var(--bulma-text-weak); }
+// The code tabs toggle their own label in place ("Show code" / "Hide code"), so
+// bolding the active state makes one control change weight as you click it.
+// The colour and the underline still mark it open. The Files / Instructions
+// tabs keep the bold: there it distinguishes the open tab from its siblings.
+// var(--bulma-button-weight) is what .button gives the inactive state, so the
+// two match in any theme.
+.panel-tab.code-tab.is-active { font-weight: var(--bulma-button-weight); }
 .panel-divider { width: 1px; background: var(--bulma-border); align-self: stretch; margin: 0.4rem 0; }
 .panel-badge { display: inline-block; background: var(--bulma-text-weak); color: var(--bulma-scheme-main); border-radius: 999px; padding: 0.12rem 0.45rem; margin-left: 0.4rem; font-size: 0.8rem; font-weight: 600; }
 .panel-section { border-top: 1px solid var(--bulma-border); }

@@ -6,7 +6,8 @@ import { ref, computed, watch } from './vue.esm-browser.js';
 // Owns the transient AI busy-state so the interruptible "Stop" variants work.
 export default {
     props: ['openPanel', 'hasExplanation', 'hasCode', 'canGenerate', 'codeValid',
-            'running', 'hasError', 'isLocked', 'isTestCell', 'showExplain', 'editing'],
+            'running', 'hasError', 'isLocked', 'isTestCell', 'showExplain', 'editing',
+            'hideCode'],
     emits: ['update:openPanel', 'gencode', 'clearcode', 'validate', 'explain', 'interrupt', 'dismiss-error'],
     setup(props, { emit }) {
         const togglePanel = (name) => {
@@ -51,7 +52,7 @@ export default {
     },
     template: /* html */ `
         <div class="code-tabs">
-            <button class="button is-ghost panel-tab code-tab"
+            <button v-if="!hideCode" class="button is-ghost panel-tab code-tab"
                     :class="{ 'is-active': openPanel === 'code' }"
                     @click.stop="togglePanel('code')">
                 <span class="icon is-small"><i class="bx" :class="openPanel === 'code' ? 'bx-caret-down' : 'bx-caret-right'"></i></span>
@@ -73,7 +74,7 @@ export default {
                         title="Clear code"
                         :disabled="isLocked || !hasCode" @click.stop="$emit('clearcode')">
                     <span class="icon"><i class="bx bx-eraser"></i></span>
-                    <span>Clear</span>
+                    <span>Clear code</span>
                 </button>
                 <!-- On error/warning there is no Generate button here: the red
                      "Fix Code" button in the description toolbar takes over. -->
@@ -95,7 +96,13 @@ export default {
                     <span class="icon"><i class="bx bx-stop-circle"></i></span>
                     <span>Stop validation</span>
                 </button>
-                <button v-else :disabled="running || !codeValid" class="button is-small"
+                <!-- Same enabling condition as Explain below: both read the code
+                     that is there without changing it, so if one can run on this
+                     cell the other can. Validate used to additionally require
+                     codeValid, which disabled it exactly when the code was stale
+                     -- the case where checking it against the description is most
+                     worth doing. -->
+                <button v-else :disabled="running || isLocked || !hasCode" class="button is-small"
                         title="Validate code against description" @click.stop="onValidate">
                     <span class="icon"><i class="bx bx-check"></i></span><span>Validate</span>
                 </button>

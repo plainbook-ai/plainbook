@@ -71,6 +71,18 @@ parser.add_argument('--logview', action='store_true', default=False,
                     help='Open the notebook in read-only log-view mode. Enables the /log_view replay UI and rejects all mutations. Does not write new log entries.')
 parser.add_argument('--user-study', '--user_study', dest='user_study', action='store_true', default=False,
                     help='Enable user-study mode features (e.g. submit button)')
+parser.add_argument('--unit-tests-only', '--unit_tests_only', dest='unit_tests_only',
+                    action='store_true', default=False,
+                    help='User-study mode: only unit tests can be created, edited and run. '
+                         'The notebook itself is frozen -- no cell may be edited, inserted, '
+                         'deleted or moved, and no AI feature may regenerate, validate, '
+                         'explain or audit a cell. Main-cell code is executed as stored and '
+                         'is never regenerated.')
+parser.add_argument('--hide-code', '--hide_code', dest='hide_code',
+                    action='store_true', default=False,
+                    help='Hide the generated code of the notebook cells, so it is worked from '
+                         'the plain-language descriptions and the outputs alone. Unit-test code '
+                         'stays visible. Independent of --unit-tests-only.')
 parser.add_argument('--print-all', '--print_all', dest='print_all',
                     action='store_true', default=False,
                     help='Include the navbar and files/instructions panel in the browser print/PDF output.')
@@ -343,13 +355,20 @@ notebook_path = os.path.abspath(args.notebook)
 
 from .plainbook import Plainbook
 from . import action_log
-notebook = Plainbook(notebook_path, debug=args.debug, dump_ai_requests=args.dump_ai_requests)
+notebook = Plainbook(notebook_path, debug=args.debug, dump_ai_requests=args.dump_ai_requests,
+                     unit_tests_only=args.unit_tests_only)
 assert notebook.kc is not None
 assert notebook.km.is_alive()
 # The local model server (if this process started one) must not outlive us.
 atexit.register(local_models.stop)
 action_log.LOGVIEW_ENABLED = args.logview
 action_log.bind(notebook, args.log and not args.logview)
+
+# User-study mode: the notebook is the artefact under test, so it is frozen and
+# only its unit tests may be touched. Enforced here on the server, because the
+# client's is_locked is advisory only -- no handler checks it, so curl defeats
+# it. Modelled on LOGVIEW_ENABLED, which is a real guard.
+UNIT_TESTS_ONLY = args.unit_tests_only
                     
 # Static file routes
 def serve_asset(filepath, folder):
@@ -459,6 +478,45 @@ def not_in_user_study(func):
         return func(*args_, **kwargs)
     return wrapper
 
+
+STUDY_DENIED_MESSAGE = ('Only unit tests can be changed in --unit-tests-only mode. '
+                        'The notebook itself is fixed.')
+
+
+def study_denied(func):
+    """Refuses a route outright in --unit-tests-only mode.
+
+    Carries two kinds of route: those that edit a main cell, and those that
+    point an AI at one. The second kind matters as much as the first, because
+    a study's planted bug is as thoroughly destroyed by an AI that repairs it
+    as by a participant who edits it, and as thoroughly given away by one that
+    explains or audits it.
+
+    Placed in the same decorator slot as action_log.logged, so it runs before
+    require_token -- a denied route answers 403 whether or not the token was
+    good, which is the same answer either way.
+    """
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        if UNIT_TESTS_ONLY:
+            raise HTTPError(403, STUDY_DENIED_MESSAGE)
+        return func(*args, **kwargs)
+    return wrapper
+
+
+def deny_target_role(role):
+    """Refuses the 'target' role in --unit-tests-only mode.
+
+    /generate_unit_test_cell_code and /validate_unit_test_code live in the
+    unit-test family and must keep working, but both delegate to main-cell AI
+    when the role is 'target' -- generate_code_cell and validate_code_cell
+    respectively. `role` arrives as unvalidated JSON, so this is the one place
+    the boundary can be drawn, and a route-level decorator cannot draw it.
+    """
+    if UNIT_TESTS_ONLY and role == 'target':
+        raise HTTPError(403, STUDY_DENIED_MESSAGE)
+
+
 # Stateful decorator
 def stateful(func):
     @wraps(func)
@@ -522,6 +580,8 @@ def get_notebook():
         log_enabled=args.log and not args.logview,
         logview_enabled=args.logview,
         is_user_study=args.user_study,
+        unit_tests_only=args.unit_tests_only,
+        hide_code=args.hide_code,
         print_all_enabled=args.print_all,
         explanation_detail=settings.get('explanation_detail', DEFAULT_EXPLANATION_DETAIL_LEVEL),
         explanation_bullets=settings.get('explanation_bullets', DEFAULT_EXPLANATION_USE_BULLETS),
@@ -748,6 +808,7 @@ def _save_global_flag(key, value):
 
 @post('/set_fix_error_amends_description')
 @action_log.logged('set_fix_error_amends_description')
+@study_denied
 @require_token
 def set_fix_error_amends_description():
     """Persist the global "Fix errors also amends the description" setting."""
@@ -757,6 +818,7 @@ def set_fix_error_amends_description():
 
 @post('/edit_explanation')
 @action_log.logged('edit_explanation')
+@study_denied
 @stateful
 @require_token
 def edit_explanation():
@@ -779,6 +841,7 @@ def edit_explanation():
 
 @post('/propose_amend')
 @action_log.logged('propose_amend')
+@study_denied
 @stateful
 @require_token
 def propose_amend():
@@ -800,6 +863,7 @@ def propose_amend():
 
 @post('/commit_amend')
 @action_log.logged('commit_amend')
+@study_denied
 @stateful
 @require_token
 def commit_amend():
@@ -811,6 +875,7 @@ def commit_amend():
 
 @post('/unfold')
 @action_log.logged('unfold')
+@study_denied
 @stateful
 @require_token
 def unfold():
@@ -824,6 +889,7 @@ def unfold():
 
 @post('/edit_code')
 @action_log.logged('edit_code')
+@study_denied
 @stateful
 @require_token
 def edit_code():
@@ -835,6 +901,7 @@ def edit_code():
 
 @post('/clear_code')
 @action_log.logged('clear_code')
+@study_denied
 @stateful
 @require_token
 def clear_code():
@@ -845,6 +912,7 @@ def clear_code():
 
 @post('/edit_markdown')
 @action_log.logged('edit_markdown')
+@study_denied
 @stateful
 @require_token
 def edit_markdown():
@@ -856,6 +924,7 @@ def edit_markdown():
 
 @post('/insert_cell')
 @action_log.logged('insert_cell')
+@study_denied
 @stateful
 @require_token
 def insert_cell():
@@ -867,6 +936,7 @@ def insert_cell():
 
 @post('/delete_cell')
 @action_log.logged('delete_cell')
+@study_denied
 @stateful
 @require_token
 def delete_cell():
@@ -877,6 +947,7 @@ def delete_cell():
 
 @post('/move_cell')
 @action_log.logged('move_cell')
+@study_denied
 @stateful
 @require_token
 def move_cell():
@@ -894,7 +965,9 @@ def get_notebook_state():
     return {}
 
 @post('/rename_notebook')
+@action_log.logged('rename_notebook')
 @not_in_user_study
+@study_denied
 @stateful
 @require_token
 def rename_notebook():
@@ -999,6 +1072,7 @@ def _friendly_ai_error(e):
 
 @post('/generate_code')
 @action_log.logged('generate_code')
+@study_denied
 @stateful
 @require_token
 def generate_code_cell():
@@ -1045,6 +1119,7 @@ def generate_code_cell():
 
 @post('/generate_test_code')
 @action_log.logged('generate_test_code')
+@study_denied
 @stateful
 @require_token
 def generate_test_code():
@@ -1095,6 +1170,7 @@ def execute_test_cell():
 
 @post('/validate_code')
 @action_log.logged('validate_code')
+@study_denied
 @stateful
 @require_token
 def validate_code_cell():
@@ -1117,6 +1193,7 @@ def validate_code_cell():
 
 @post('/explain_code')
 @action_log.logged('explain_code')
+@study_denied
 @stateful
 @require_token
 def explain_code_cell():
@@ -1154,6 +1231,9 @@ def validate_unit_test_code():
     cell_index = data.get('cell_index')
     test_name = data.get('test_name')
     role = data.get('role')
+    # role='target' delegates to validate_code_cell, i.e. an AI critique of the
+    # main cell, which in study mode would hand over the planted bug.
+    deny_target_role(role)
     api_key, ai_provider, model, error = _get_ai_config()
     if error:
         return dict(status='error', message=error)
@@ -1185,6 +1265,7 @@ def set_validation_visibility():
 
 @post('/verify_notebook')
 @action_log.logged('verify_notebook')
+@study_denied
 @stateful
 @require_token
 def verify_notebook():
@@ -1272,6 +1353,7 @@ def set_share_output():
 
 
 @post('/submit_study')
+@action_log.logged('submit_study')
 @stateful
 @require_token
 def submit_study():
@@ -1334,6 +1416,7 @@ def set_ask_questions():
 
 @post('/set_skip_regeneration')
 @action_log.logged('set_skip_regeneration')
+@study_denied
 @require_token
 def set_skip_regeneration():
     """Persist the global "Skip regeneration when data is unchanged" setting."""
@@ -1382,6 +1465,13 @@ def _spawn_plainbook(path):
     cmd = [sys.executable, '-m', 'plainbook.main', path]
     if args.app_window:
         cmd.append('--app-window')
+    # Belt and braces. The routes that reach here are all refused in study mode,
+    # so this should be unreachable; if one is ever added back, the child must
+    # not be the unrestricted window that undoes the whole restriction.
+    if args.unit_tests_only:
+        cmd.append('--unit-tests-only')
+    if args.hide_code:
+        cmd.append('--hide-code')
     subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      start_new_session=True)
 
@@ -1408,6 +1498,7 @@ def _raise_not_a_folder(folder):
 @post('/new_notebook')
 @not_in_user_study
 @action_log.logged('new_notebook')
+@study_denied
 @require_token
 def new_notebook():
     """Create a plainbook in the chosen folder and open it in its own window.
@@ -1441,6 +1532,7 @@ def new_notebook():
 @post('/open_notebook')
 @not_in_user_study
 @action_log.logged('open_notebook')
+@study_denied
 @require_token
 def open_notebook():
     """Open an existing notebook in its own window, leaving this one running.
@@ -1467,6 +1559,7 @@ def open_notebook():
 @post('/copy_notebook')
 @not_in_user_study
 @action_log.logged('copy_notebook')
+@study_denied
 @require_token
 def copy_notebook():
     """Save a copy of this plainbook under a new name, in the chosen folder, and
@@ -1527,6 +1620,7 @@ def file_list():
     
 @post('/set_files')
 @action_log.logged('set_files')
+@study_denied
 @require_token
 def set_files():
     data = request.json
@@ -1545,6 +1639,7 @@ def get_files():
 
 @post('/set_ai_instructions')
 @action_log.logged('set_ai_instructions')
+@study_denied
 @require_token
 def set_ai_instructions():
     data = request.json
@@ -1678,6 +1773,9 @@ def generate_unit_test_code():
     cell_index = data.get('cell_index')
     test_name = data.get('test_name')
     role = data.get('role')
+    # role='target' calls generate_code_cell, which rewrites the main cell's
+    # source -- the study's bug included.
+    deny_target_role(role)
     validation_feedback = data.get('validation_feedback')
     api_key, ai_provider, model, error = _get_ai_config()
     if error:

@@ -112,6 +112,17 @@ OP_LOG_CONFIG = {
     "set_files": {"snapshot": False, "truncate_param_fields": {"files": 4096, "missing_files": 4096}},
     "set_ai_instructions": {"snapshot": False, "truncate_param_fields": {"ai_instructions": 4096}},
     "reset_tokens": {"snapshot": False},
+    # The notebook is uploaded as-is; nothing about it is recorded twice.
+    "submit_study": {"snapshot": False},
+    # Renaming saves the notebook under a new name and moves all later edits to
+    # that copy, so it belongs in the record; it also has to carry @logged to be
+    # refused in --logview mode, which is the only mutation guard there is.
+    "rename_notebook": {"snapshot": False},
+    # install_package returns pip's whole stdout, which runs to tens of KB for a
+    # package with dependencies and would otherwise go into the notebook verbatim.
+    "install_package": {"snapshot": False, "truncate_result_fields": {"output": 4096}},
+    "verify_notebook": {"snapshot": False, "truncate_result_fields": {"verification": 8192}},
+    "set_verification_visibility": {"snapshot": False},
 }
 
 
@@ -190,7 +201,22 @@ def _extract_error_outputs(outputs):
     return error, stderr
 
 
-def _cell_snapshot(plainbook, cell_index):
+# Ops whose interesting outputs live on a unit-test sub-cell rather than on the
+# cell itself. For these the snapshot must look inside
+# metadata.unit_tests[name].cells[role], or a failing test is recorded as having
+# run with no trace of what it found.
+UNIT_TEST_OUTPUT_OPS = {"run_unit_test_cell"}
+
+
+def _unit_test_sub_cell(cell, test_name, role):
+    """The stored sub-cell dict for (test_name, role), or None."""
+    try:
+        return cell.metadata["unit_tests"][test_name]["cells"][role]
+    except (KeyError, TypeError, AttributeError):
+        return None
+
+
+def _cell_snapshot(plainbook, cell_index, op_name=None, params=None):
     if cell_index is None:
         return None
     try:
@@ -211,7 +237,23 @@ def _cell_snapshot(plainbook, cell_index):
         snap["source"] = source
         snap["description"] = description
         cell.metadata["_last_logged_hash"] = new_hash
-    outputs = cell.get("outputs", []) if cell.get("cell_type") in ("code", "test") else []
+    # Which outputs describe this op: a unit-test run is about its sub-cell, not
+    # about the cell the test hangs off, whose outputs are from a different run
+    # entirely.
+    sub_cell = None
+    if op_name in UNIT_TEST_OUTPUT_OPS and isinstance(params, dict):
+        test_name, role = params.get("test_name"), params.get("role")
+        if test_name and role:
+            sub_cell = _unit_test_sub_cell(cell, test_name, role)
+            # Recorded even when the sub-cell has no outputs, so an analysis can
+            # tell "this entry is about a sub-cell" from "no sub-cell was found".
+            snap["unit_test"] = {"name": test_name, "role": role}
+    if sub_cell is not None:
+        outputs = sub_cell.get("outputs") or []
+    elif cell.get("cell_type") in ("code", "test"):
+        outputs = cell.get("outputs", [])
+    else:
+        outputs = []
     error, stderr = _extract_error_outputs(outputs)
     if error is not None:
         snap["error"] = error
@@ -255,7 +297,7 @@ def _build_entry(op_name, params, result, duration_ms, error_repr):
         "error": error_repr,
     }
     if cfg.get("snapshot", False):
-        snap = _cell_snapshot(_plainbook, cell_index)
+        snap = _cell_snapshot(_plainbook, cell_index, op_name, params)
         if snap is not None:
             entry["cell_snapshot"] = snap
             if entry["cell_id"] is None:
