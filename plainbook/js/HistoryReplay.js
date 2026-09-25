@@ -52,8 +52,10 @@ function materializeErrorOutputs(snapshot) {
 // Returns tests[testName].cells[role] for a cell, creating the chain if the
 // log starts mid-story (a test created before the initial snapshot). Returns
 // null when the entry does not name a sub-cell.
+const UNIT_TEST_ROLES = new Set(['setup', 'target', 'test']);
+
 function unitTestSubCell(cell, testName, role) {
-    if (!cell || !testName || (role !== 'setup' && role !== 'test')) return null;
+    if (!cell || !testName || !UNIT_TEST_ROLES.has(role)) return null;
     cell.metadata = cell.metadata || {};
     cell.metadata.unit_tests = cell.metadata.unit_tests || {};
     const tests = cell.metadata.unit_tests;
@@ -127,6 +129,17 @@ function applyEntry(cells, entry, state) {
         }
         case 'run_unit_test_cell': {
             if (entry.cell_id) state.lastExecutedByCellId[entry.cell_id] = entry.ts_server;
+            // Record the outcome on the sub-cell that ran. Failure is carried by
+            // result.details (the route's outputs are dropped from the log), and
+            // the traceback by cell_snapshot, which for these ops describes the
+            // sub-cell rather than the cell the test hangs off.
+            const sub = unitTestSubCell(cells[idx], params.test_name, params.role);
+            if (sub) {
+                const failed = (result && result.details === 'CellExecutionError')
+                    || !!(snap && snap.error);
+                sub.metadata.last_run = { failed, ts: entry.ts_server };
+                sub.outputs = materializeErrorOutputs(snap);
+            }
             break;
         }
         case 'generate_code':
@@ -160,6 +173,9 @@ function applyEntry(cells, entry, state) {
         case 'save_unit_test_code':
         case 'clear_unit_test_code':
         case 'generate_unit_test_cell_code': {
+            // target has no stored source of its own -- it is the cell's own
+            // code -- so these edit ops only ever apply to setup and test.
+            if (params.role !== 'setup' && params.role !== 'test') break;
             const sub = unitTestSubCell(cells[idx], params.test_name, params.role);
             if (!sub) break;
             if (op === 'save_unit_test_explanation') {

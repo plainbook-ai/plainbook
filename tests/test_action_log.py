@@ -301,3 +301,75 @@ class TestClientEvents:
             assert "log" not in notebook.nb.metadata
         finally:
             action_log.bind(None, False)
+
+
+class TestUnitTestSnapshots:
+    """A unit-test run is about its sub-cell, not about the cell the test hangs
+    off. _cell_snapshot used to read the parent cell's outputs for every op, so a
+    failing unit test was logged as having run with no trace of what it found."""
+
+    @staticmethod
+    def _cell_with_unit_test(setup_outputs=None, test_outputs=None):
+        """A minimal nbformat-ish cell carrying one unit test."""
+        import nbformat
+        cell = nbformat.v4.new_code_cell(source="x = 1")
+        cell.metadata["unit_tests"] = {
+            "t1": {"cells": {
+                "setup": {"source": "d = 1", "metadata": {}, "outputs": setup_outputs or []},
+                "test": {"source": "assert d == 2", "metadata": {}, "outputs": test_outputs or []},
+            }}
+        }
+        return cell
+
+    @staticmethod
+    def _error_output(ename, evalue):
+        return {"output_type": "error", "ename": ename, "evalue": evalue,
+                "traceback": [f"{ename}: {evalue}"]}
+
+    def test_failing_unit_test_error_is_captured(self, notebook):
+        cell = self._cell_with_unit_test(
+            test_outputs=[self._error_output("AssertionError", "expected 2")])
+        notebook.nb.cells.append(cell)
+        idx = len(notebook.nb.cells) - 1
+        snap = action_log._cell_snapshot(
+            notebook, idx, "run_unit_test_cell", {"test_name": "t1", "role": "test"})
+        assert snap["error"]["ename"] == "AssertionError"
+        assert snap["error"]["evalue"] == "expected 2"
+        assert snap["unit_test"] == {"name": "t1", "role": "test"}
+
+    def test_parent_cell_error_is_not_attributed_to_the_sub_cell(self, notebook):
+        """The cell itself failed earlier; a passing test must not inherit that."""
+        cell = self._cell_with_unit_test()
+        cell.outputs = [self._error_output("NameError", "name 'q' is not defined")]
+        notebook.nb.cells.append(cell)
+        idx = len(notebook.nb.cells) - 1
+        snap = action_log._cell_snapshot(
+            notebook, idx, "run_unit_test_cell", {"test_name": "t1", "role": "test"})
+        assert "error" not in snap, snap
+
+    def test_non_unit_test_ops_still_read_the_cell(self, notebook):
+        cell = self._cell_with_unit_test()
+        cell.outputs = [self._error_output("NameError", "name 'q' is not defined")]
+        notebook.nb.cells.append(cell)
+        idx = len(notebook.nb.cells) - 1
+        snap = action_log._cell_snapshot(notebook, idx, "execute_cell", {"cell_index": idx})
+        assert snap["error"]["ename"] == "NameError"
+        assert "unit_test" not in snap
+
+    def test_missing_sub_cell_is_recorded_but_yields_no_error(self, notebook):
+        cell = self._cell_with_unit_test()
+        notebook.nb.cells.append(cell)
+        idx = len(notebook.nb.cells) - 1
+        snap = action_log._cell_snapshot(
+            notebook, idx, "run_unit_test_cell", {"test_name": "nope", "role": "test"})
+        assert snap["unit_test"] == {"name": "nope", "role": "test"}
+        assert "error" not in snap
+
+    def test_sub_cell_stderr_is_captured(self, notebook):
+        cell = self._cell_with_unit_test(
+            test_outputs=[{"output_type": "stream", "name": "stderr", "text": "DeprecationWarning: x"}])
+        notebook.nb.cells.append(cell)
+        idx = len(notebook.nb.cells) - 1
+        snap = action_log._cell_snapshot(
+            notebook, idx, "run_unit_test_cell", {"test_name": "t1", "role": "test"})
+        assert "DeprecationWarning" in snap["stderr"]
