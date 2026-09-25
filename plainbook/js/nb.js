@@ -16,11 +16,12 @@ import NotebookTitle from './NotebookTitle.js';
 import NotebookFileModal from './NotebookFileModal.js';
 import SideIndex from './SideIndex.js';
 import AiSetupBanner from './AiSetupBanner.js';
+import StudyModeBanner from './StudyModeBanner.js';
 import { outputsHaveStoppingError, getErrorInfo } from './errorUtils.js';
 import { serverFetch, isServerDown, SERVER_DOWN_MESSAGE } from './serverFetch.js';
 
 const app = createApp({
-    components: { AppNavbar, NotebookCell, CellInsertionZone, CellLabel, SettingsModal, InfoModal, TestHelpModal, UiError, PanelBar, NotebookHelp, UnitTestView, NotebookTitle, NotebookFileModal, SideIndex, AiSetupBanner },
+    components: { AppNavbar, NotebookCell, CellInsertionZone, CellLabel, SettingsModal, InfoModal, TestHelpModal, UiError, PanelBar, NotebookHelp, UnitTestView, NotebookTitle, NotebookFileModal, SideIndex, AiSetupBanner, StudyModeBanner },
     setup() {
         // Extract token from URL
         const urlParams = new URLSearchParams(window.location.search);
@@ -100,6 +101,12 @@ const app = createApp({
         const claudeViaBedrock = ref(false);
         const logEnabled = ref(false);
         const logviewEnabled = ref(false);
+        // --unit-tests-only / --hide-code: the user-study flags. Enforcement is
+        // entirely server-side (see study_denied in main.py); these only shape
+        // the UI, so a participant meets a control that is not there rather than
+        // one that answers 403.
+        const unitTestsOnly = ref(false);
+        const hideCode = ref(false);
         const printAllEnabled = ref(false);
         // True when the server launched the UI as a chromeless window, which has
         // no browser toolbar; the navbar then offers its own Refresh button.
@@ -136,6 +143,14 @@ const app = createApp({
 
         // Test cell state
         const last_valid_test_cell_index = ref(-1);
+
+        // Read-only for the notebook's own cells. isLocked cannot be reused for
+        // this: it is a superset that also locks the unit-test UI, and it is
+        // overwritten from the server on every response (see updateState), so a
+        // client-side override would not survive. Passed only at the main-cell
+        // call sites -- CellCodeBar, ExplanationEditor and CodeCell are shared
+        // with the unit-test side, so the distinction lives in the template.
+        const mainLocked = computed(() => isLocked.value || unitTestsOnly.value);
 
         // Configure global error handler
         const app = getCurrentInstance().appContext.app;
@@ -296,6 +311,8 @@ const app = createApp({
                 if (r.skip_regeneration !== undefined) skipRegeneration.value = !!r.skip_regeneration;
                 logEnabled.value = !!r.log_enabled;
                 logviewEnabled.value = !!r.logview_enabled;
+                unitTestsOnly.value = !!r.unit_tests_only;
+                hideCode.value = !!r.hide_code;
                 printAllEnabled.value = !!r.print_all_enabled;
                 chromeless.value = !!r.chromeless;
                 document.body.classList.toggle('print-all', printAllEnabled.value);
@@ -1991,6 +2008,7 @@ const app = createApp({
             tocOpen,
             genError, uiError, closeUiError, renameNotebook, debug, sendDebugRequest, resetTokens,
             explanationEditKey, deleteCell, moveCell,
+            mainLocked, unitTestsOnly, hideCode,
             clearOutputs, activeAiProvider, availableAiProviders, setActiveAiProvider, onProvidersChanged, isCodespace, hasGeminiKey, hasClaudeKey, hasOpenaiKey, claudeViaBedrock, logEnabled, logviewEnabled, printAllEnabled, chromeless, authToken,
             restarting, ui_restart,
             ui_runTestCell, ui_runAllTests, ui_saveExplanationAndRunTest, ui_saveCodeAndRunTest, ui_forceRegenerateTestCode,

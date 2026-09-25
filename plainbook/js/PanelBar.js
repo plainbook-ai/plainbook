@@ -4,7 +4,7 @@ import InstructionsPanel from './InstructionsPanel.js';
 import VerificationBar from './VerificationBar.js';
 
 export default {
-    props: ['authToken', 'verification'],
+    props: ['authToken', 'verification', 'unitTestsOnly'],
     emits: ['dismiss-verification'],
     components: { InputFile, InstructionsPanel, VerificationBar },
     setup() {
@@ -39,8 +39,8 @@ export default {
                         {{ missingCount }}
                     </span>
                 </button>
-                <div class="panel-divider"></div>
-                <button class="button is-ghost panel-tab"
+                <div v-if="!unitTestsOnly" class="panel-divider"></div>
+                <button v-if="!unitTestsOnly" class="button is-ghost panel-tab"
                     @click="toggleTab('instructions')"
                     :class="{ 'is-active': activeTab === 'instructions' }"
                 >

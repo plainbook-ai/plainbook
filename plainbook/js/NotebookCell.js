@@ -14,7 +14,7 @@ export default {
     components: { MarkdownCell, CodeCell, CodeExplanation, CellCodeBar, ExplanationEditor, ValidationCell, OutputRenderer, MissingModuleBar },
     props: ['cell', 'isActive', 'isLocked', 'running', 'codeValid', 'outputValid', 'executed',
         'asRead', 'markdownEditKey', 'explanationEditKey', 'testCodeValid', 'moduleInstall',
-        'clarifyState', 'foldState'],
+        'clarifyState', 'foldState', 'hideCode'],
     emits: [
         'save-markdown', 'save-explanation', 'save-code',
         'run-cell', 'save-and-run', 'save-code-and-run', 'generate-code', 'clear-code',
@@ -152,6 +152,7 @@ export default {
                      stay visible when the cell is unfocused. -->
                 <cell-code-bar v-show="isActive"
                     v-model:open-panel="openPanel"
+                    :hide-code="hideCode"
                     :has-explanation="!!cell.metadata?.ai_code_explanation"
                     :has-code="(cell.source || '').trim().length > 0"
                     :can-generate="canGenerate"
@@ -179,7 +180,7 @@ export default {
                     :executed="executed"
                     :hasError="hasError"
                     :asRead="asRead"
-                    :external-collapse="openPanel !== 'code'"
+                    :external-collapse="hideCode || openPanel !== 'code'"
                     @save="$emit('save-code', $event)"
                     @saveandrun="$emit('save-code-and-run', $event)"
                     @activate="$emit('activate')" />
@@ -238,6 +239,7 @@ export default {
 
                 <cell-code-bar v-show="isActive"
                     v-model:open-panel="openPanel"
+                    :hide-code="hideCode"
                     :has-explanation="!!cell.metadata?.ai_code_explanation"
                     :has-code="(cell.source || '').trim().length > 0"
                     :can-generate="canGenerate"
@@ -265,7 +267,7 @@ export default {
                     :executed="false"
                     :hasError="hasError"
                     :asRead="asRead"
-                    :external-collapse="openPanel !== 'code'"
+                    :external-collapse="hideCode || openPanel !== 'code'"
                     @save="$emit('save-code', $event)"
                     @saveandrun="$emit('save-code-and-run-test', $event)"
                     @activate="$emit('activate')" />

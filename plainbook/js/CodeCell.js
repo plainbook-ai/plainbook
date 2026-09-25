@@ -161,12 +161,14 @@ export default {
         };
 
         const saveCode = () => {
+            if (localIsLocked.value) return;
             if (!isEditing.value) return;
             isEditing.value = false;
             emit('save', localSource.value);
         };
 
         const saveAndRunCode = () => {
+            if (localIsLocked.value) return;
             if (!isEditing.value) return;
             isEditing.value = false;
             emit('saveandrun', localSource.value);

@@ -44,9 +44,15 @@ const MarkdownCell = {
 
         watch(() => props.isLocked, (newVal) => {
             localIsLocked.value = newVal;
-            // if (newVal) {
-            //     cancelEdit();
-            // }
+            if (newVal) {
+                // Leave edit mode, so a cell locked mid-edit does not keep an
+                // editable textarea whose Save would be refused. Deliberately
+                // not cancelEdit(): that deletes the cell when the original was
+                // empty, and locking must never delete anything -- which is
+                // presumably why the call here was commented out before.
+                localSource.value = originalSource.value;
+                isEditing.value = false;
+            }
         });
 
         const autoResize = () => {
@@ -61,6 +67,7 @@ const MarkdownCell = {
         };
 
         const enterEditMode = () => {
+            if (localIsLocked.value) return;
             originalSource.value = localSource.value;
             isEditing.value = true;
             nextTick(() => {
@@ -84,6 +91,7 @@ const MarkdownCell = {
         };
 
         const save = () => {
+            if (localIsLocked.value) return;
             const trimmed = (localSource.value || '').trim();
             isEditing.value = false;
             if (trimmed.length === 0) {
@@ -108,7 +116,7 @@ const MarkdownCell = {
                  class="explanation-toolbar pl-3 pr-3"
                  style="display: flex; align-items: center; justify-content: flex-end; gap: 0.5rem;">
                 <div class="toolbar-right" style="display: flex; gap: 0.25rem;">
-                    <button class="button is-small is-info" title="Edit markdown" @click.stop="enterEditMode">Edit</button>
+                    <button class="button is-small is-info" title="Edit markdown" :disabled="localIsLocked" @click.stop="enterEditMode">Edit</button>
                     <button class="button is-small is-info py-1 " title="Move up" aria-label="Move Up" @click.stop="$emit('moveUp')"><span class="icon"><i class="bx bx-arrow-up"></i></span></button>
                     <button class="button is-small is-info py-1 " title="Move down" aria-label="Move Down" @click.stop="$emit('moveDown')"><span class="icon"><i class="bx bx-arrow-down"></i></span></button>
                     <button class="button is-small is-danger py-1 " title="Delete" aria-label="Delete" @click.stop="$emit('delete')"><span class="icon"><i class="bx bx-trash"></i></span></button>
@@ -128,7 +136,7 @@ const MarkdownCell = {
                 ></textarea>
                 <div class="mt-2" style="display: flex; justify-content: flex-end; gap: 0.5rem;">
                     <button class="button is-small" @click="cancelEdit">Cancel</button>
-                    <button class="button is-small is-primary" @click="save">Save</button>
+                    <button class="button is-small is-primary" :disabled="localIsLocked" @click="save">Save</button>
                 </div>
             </div>
         </div>`

@@ -242,11 +242,17 @@ class _LiveCellMeta:
 class Plainbook:
     """Plainbook implementation backed by the snapshot kernel."""
 
-    def __init__(self, notebook_path, debug=False, dump_ai_requests=False):
+    def __init__(self, notebook_path, debug=False, dump_ai_requests=False,
+                 unit_tests_only=False):
         print(f"Starting Plainbook for {notebook_path}...")
         self.path = notebook_path
         self.debug = debug
         self.dump_ai_requests = dump_ai_requests
+        # User-study mode (--unit-tests-only): the stored code of the notebook is
+        # the artefact under test and must never be regenerated. See
+        # _pin_code_validity for why pinning, rather than merely refusing
+        # generation, is what makes that work.
+        self.unit_tests_only = unit_tests_only
         self.name = os.path.splitext(os.path.basename(notebook_path))[0]
         self.nb = None
         self._lock = threading.Lock()
@@ -257,7 +263,14 @@ class Plainbook:
         self.last_valid_test_cell = -1
         # Loads the notebook from disk.
         self._load_notebook()
-        self._filter_input_files()
+        if unit_tests_only:
+            # _filter_input_files is skipped deliberately: it invalidates every
+            # cell citing a file that is missing on THIS machine, which on a
+            # study notebook opened on a participant's laptop would mark the
+            # cells stale and have the first run regenerate them.
+            self._pin_code_validity()
+        else:
+            self._filter_input_files()
         # AI request tracker, so we can interrupt if needed.
         self.ai_request_pending = False
         # Start the snapshot kernel.
@@ -1373,6 +1386,30 @@ class Plainbook:
         for j in range(index + 1, len(self.nb.cells)):
             if self.nb.cells[j].metadata.get('unit_tests'):
                 self._invalidate_all_unit_tests(j, 'setup_code')
+
+    def _pin_code_validity(self):
+        """Declares every cell's stored code valid, for --unit-tests-only mode.
+
+        The client asks the server to generate a cell's code exactly when
+        last_valid_code_cell has dropped below it, so pinning the watermark at
+        the last cell is what guarantees the stored code is executed as it
+        stands and never regenerated -- the property the whole study rests on.
+
+        Refusing /generate_code on its own would not do: execute_cell raises for
+        any cell past the watermark, and unit-test generation refuses unless the
+        target's code is valid, so a dropped watermark would leave a participant
+        unable to run or test anything, with no way to recover.
+
+        The pinned value does reach the file, because _write stores the
+        watermarks in the notebook's metadata and study mode writes on every
+        run. That is harmless, and arguably right: it records that the stored
+        code is the code, so reopening the notebook without the flag will not
+        offer to regenerate it either.
+        """
+        last = len(self.nb.cells) - 1
+        self.last_valid_code_cell = last
+        self.last_valid_output_cell = min(self.last_valid_output_cell, last)
+        self.last_valid_test_cell = min(self.last_valid_test_cell, last)
 
     def propose_amend(self, api_key, index, text, ai_provider="gemini", model=None):
         """Returns the explanation rewritten to incorporate `text`. Does not modify

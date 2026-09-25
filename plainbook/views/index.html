@@ -58,6 +58,7 @@
         :restarting="restarting"
         :log-enabled="logEnabled"
         :logview-enabled="logviewEnabled"
+        :unit-tests-only="unitTestsOnly"
         :chromeless="chromeless"
         :auth-token="authToken"
         @lock="lockNotebook"
@@ -95,6 +96,7 @@
         <div class="notebook-main">
             <panel-bar
                 :auth-token="authToken"
+                :unit-tests-only="unitTestsOnly"
                 :verification="notebook?.metadata?.verification"
                 @dismiss-verification="dismissVerification"
             />
@@ -107,6 +109,7 @@
                 :running="running"
                 :running-activity="runningActivity"
                 :is-locked="isLocked"
+                :main-locked="mainLocked"
                 :last-valid-code-cell-index="last_valid_code_cell_index"
                 :last-valid-output-cell-index="last_valid_output_cell_index"
                 :unit-test-validity="unitTestValidity"
@@ -137,7 +140,7 @@
             <div v-else class="section notebook-area">
             <notebook-title
                 :name="notebook_name"
-                :is-locked="isLocked"
+                :is-locked="mainLocked"
                 @rename="renameNotebook" />
             <div class="notebook-container px-2 py-2">
                 <div v-if="loading" class="has-text-centered py-6">
@@ -156,13 +159,16 @@
                          configured, in this session, with no reload. -->
                     <ai-setup-banner v-if="!activeAiProvider" @open-settings="showSettings = true" />
 
+                    <!-- Explains why the notebook's own controls are absent. -->
+                    <study-mode-banner v-if="unitTestsOnly" />
+
                     <template v-for="(cell, index) in notebook.cells" :key="index">
 
                         <!-- Inserts above the cell. Suppressed while the notebook has
                              a single cell, so the only way to add a second one is
                              below it: newcomers otherwise build the notebook in the
                              reverse of execution order. -->
-                        <cell-insertion-zone v-if="!isLocked && notebook.cells.length > 1"
+                        <cell-insertion-zone v-if="!mainLocked && notebook.cells.length > 1"
                             :is-active="activeIndex === index || (activeIndex >= 0 && activeIndex === index - 1)"
                             :cell-count="notebook.cells.length"
                             @insert="(celltype) => insertCell(index, celltype)"
@@ -176,7 +182,8 @@
                         <notebook-cell
                             :cell="cell"
                             :is-active="activeIndex === index"
-                            :is-locked="isLocked"
+                            :is-locked="mainLocked"
+                            :hide-code="hideCode"
                             :running="running"
                             :code-valid="last_valid_code_cell_index >= index"
                             :output-valid="last_valid_output_cell_index >= index"
@@ -231,7 +238,7 @@
 
                     </template>
 
-                    <cell-insertion-zone v-if="!isLocked"
+                    <cell-insertion-zone v-if="!mainLocked"
                         :is-active="(activeIndex === -1 && notebook.cells.length === 0) || activeIndex === notebook.cells.length - 1"
                         :cell-count="notebook.cells.length"
                         @insert="(celltype) => insertCell(notebook.cells.length, celltype)"

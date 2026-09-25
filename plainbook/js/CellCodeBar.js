@@ -6,7 +6,8 @@ import { ref, computed, watch } from './vue.esm-browser.js';
 // Owns the transient AI busy-state so the interruptible "Stop" variants work.
 export default {
     props: ['openPanel', 'hasExplanation', 'hasCode', 'canGenerate', 'codeValid',
-            'running', 'hasError', 'isLocked', 'isTestCell', 'showExplain', 'editing'],
+            'running', 'hasError', 'isLocked', 'isTestCell', 'showExplain', 'editing',
+            'hideCode'],
     emits: ['update:openPanel', 'gencode', 'clearcode', 'validate', 'explain', 'interrupt', 'dismiss-error'],
     setup(props, { emit }) {
         const togglePanel = (name) => {
@@ -51,7 +52,7 @@ export default {
     },
     template: /* html */ `
         <div class="code-tabs">
-            <button class="button is-ghost panel-tab code-tab"
+            <button v-if="!hideCode" class="button is-ghost panel-tab code-tab"
                     :class="{ 'is-active': openPanel === 'code' }"
                     @click.stop="togglePanel('code')">
                 <span class="icon is-small"><i class="bx" :class="openPanel === 'code' ? 'bx-caret-down' : 'bx-caret-right'"></i></span>
