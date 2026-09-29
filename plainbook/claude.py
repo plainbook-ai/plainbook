@@ -162,6 +162,17 @@ def select_claude_providers(models):
     return providers
 
 
+def exclude_fable(providers):
+    """Drops the Fable family (both the current and previous-version entries)
+    from a Claude provider list of the shape select_claude_providers returns.
+
+    Used in --user-study mode, where Fable is not offered to participants.
+    Takes the already-built provider list rather than the raw model list, so
+    it composes with select_claude_providers instead of duplicating its family
+    parsing."""
+    return [p for p in providers if not p['id'].startswith('claude:fable')]
+
+
 def claude_generate_code(
     api_key,
     preceding_code=None,

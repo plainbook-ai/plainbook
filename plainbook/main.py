@@ -31,7 +31,7 @@ from bottle import run, default_app, request, response, redirect, TEMPLATE_PATH
 # Plainbook imports
 from .plainbook import (ExecutionError, ClarificationNeeded, check_notebook_file,
                         normalize_notebook_name, unique_notebook_path)
-from .claude import CLAUDE_MODEL, list_claude_models, select_claude_providers
+from .claude import CLAUDE_MODEL, list_claude_models, select_claude_providers, exclude_fable
 from .gemini import list_gemini_models, select_gemini_providers
 from .openai import list_openai_models, select_openai_providers
 from . import local_models
@@ -264,7 +264,17 @@ def _build_provider_registry():
             "model": _bedrock_model,
         })
     else:
-        providers.extend(_fetch_providers("claude"))
+        claude_providers = _fetch_providers("claude")
+        if args.user_study:
+            # Filtered here, not inside _fetch_providers, so the settings
+            # cache (and a run without --user-study) still reflects every
+            # model the key actually has access to. Every consumer of
+            # AI_PROVIDER_REGISTRY (the client dropdown, _ensure_active_ai_
+            # provider's auto-pick, /set_active_ai's validation against
+            # valid_ids) reads only what ends up here, so this is the single
+            # place that needs to know.
+            claude_providers = exclude_fable(claude_providers)
+        providers.extend(claude_providers)
     providers.extend(_fetch_providers("gemini"))
     providers.extend(_fetch_providers("openai"))
     AI_PROVIDER_REGISTRY[:] = providers

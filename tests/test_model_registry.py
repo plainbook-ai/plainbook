@@ -4,7 +4,7 @@ output; no network access is needed."""
 import random
 from datetime import datetime, timezone
 
-from plainbook.claude import select_claude_providers
+from plainbook.claude import select_claude_providers, exclude_fable
 from plainbook.gemini import select_gemini_providers
 from plainbook.openai import select_openai_providers
 
@@ -89,6 +89,30 @@ class TestClaude:
         assert by_id["claude:zephyr"]["model"] == "claude-zephyr-6"
         assert [p["id"] for p in select_claude_providers(models)][-1] == "claude:zephyr"
         assert len(by_id) == 3
+
+    def test_exclude_fable_drops_both_fable_entries(self):
+        providers = select_claude_providers(CLAUDE_MODELS)
+        filtered = exclude_fable(providers)
+        by_id = _by_id(filtered)
+        assert "claude:fable" not in by_id
+        assert "claude:fable-prev" not in by_id
+        # Every other family survives untouched, in the same order.
+        assert [p["id"] for p in filtered] == [
+            "claude:opus", "claude:opus-prev",
+            "claude:sonnet", "claude:sonnet-prev",
+            "claude:haiku",
+        ]
+
+    def test_exclude_fable_is_a_noop_without_fable(self):
+        models = [m for m in CLAUDE_MODELS if not m[0].startswith("claude-fable")]
+        providers = select_claude_providers(models)
+        assert exclude_fable(providers) == providers
+
+    def test_exclude_fable_does_not_mutate_its_input(self):
+        providers = select_claude_providers(CLAUDE_MODELS)
+        before = list(providers)
+        exclude_fable(providers)
+        assert providers == before
 
     def test_same_version_snapshots_collapse(self):
         # Two snapshots of the same version are one generation; the previous
