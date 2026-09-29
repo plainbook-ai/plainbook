@@ -4,7 +4,7 @@ output; no network access is needed."""
 import random
 from datetime import datetime, timezone
 
-from plainbook.claude import select_claude_providers, exclude_fable
+from plainbook.claude import select_claude_providers, select_pinned_claude_provider
 from plainbook.gemini import select_gemini_providers
 from plainbook.openai import select_openai_providers
 
@@ -90,29 +90,48 @@ class TestClaude:
         assert [p["id"] for p in select_claude_providers(models)][-1] == "claude:zephyr"
         assert len(by_id) == 3
 
-    def test_exclude_fable_drops_both_fable_entries(self):
-        providers = select_claude_providers(CLAUDE_MODELS)
-        filtered = exclude_fable(providers)
-        by_id = _by_id(filtered)
-        assert "claude:fable" not in by_id
-        assert "claude:fable-prev" not in by_id
-        # Every other family survives untouched, in the same order.
-        assert [p["id"] for p in filtered] == [
-            "claude:opus", "claude:opus-prev",
-            "claude:sonnet", "claude:sonnet-prev",
-            "claude:haiku",
+    def test_pinned_provider_matches_by_version_not_recency(self):
+        # Three sonnet versions exist; the pin must return exactly 5.5, not
+        # whichever is newest -- the whole point of pinning is surviving a
+        # later release without silently moving onto it.
+        models = [
+            ("claude-sonnet-5-6", _d("2026-09-01")),  # newer than the pin
+            ("claude-sonnet-5-5", _d("2026-06-29")),  # the pin
+            ("claude-sonnet-5", _d("2026-01-01")),    # older than the pin
         ]
+        providers = select_pinned_claude_provider(models, "sonnet", "5.5")
+        assert len(providers) == 1
+        assert providers[0]["model"] == "claude-sonnet-5-5"
+        assert providers[0]["id"] == "claude:sonnet"
+        assert providers[0]["name"] == "Claude Sonnet 5.5"
+        assert set(providers[0]) == ENTRY_KEYS
+        assert providers[0]["major"] == "claude"
+        assert providers[0]["key_setting"] == "claude_api_key"
 
-    def test_exclude_fable_is_a_noop_without_fable(self):
-        models = [m for m in CLAUDE_MODELS if not m[0].startswith("claude-fable")]
-        providers = select_claude_providers(models)
-        assert exclude_fable(providers) == providers
+    def test_pinned_provider_ignores_other_families(self):
+        # Fable, opus and haiku are all present and all newer than the pin;
+        # none of them should leak into a single-entry result for sonnet 5.5.
+        models = CLAUDE_MODELS + [("claude-sonnet-5-5", _d("2026-05-01"))]
+        providers = select_pinned_claude_provider(models, "sonnet", "5.5")
+        assert [p["id"] for p in providers] == ["claude:sonnet"]
+        assert providers[0]["model"] == "claude-sonnet-5-5"
 
-    def test_exclude_fable_does_not_mutate_its_input(self):
-        providers = select_claude_providers(CLAUDE_MODELS)
-        before = list(providers)
-        exclude_fable(providers)
-        assert providers == before
+    def test_pinned_provider_empty_when_version_not_present(self):
+        assert select_pinned_claude_provider(CLAUDE_MODELS, "sonnet", "9.9") == []
+        assert select_pinned_claude_provider(CLAUDE_MODELS, "made-up-family", "1") == []
+
+    def test_pinned_provider_prefers_newest_snapshot_of_the_same_version(self):
+        # A dated snapshot and an undated alias of the same version: the
+        # newest by created_at wins, matching select_claude_providers' own
+        # same-version tie-breaking (see test_same_version_snapshots_collapse
+        # below).
+        models = [
+            ("claude-sonnet-5-5-20260801", _d("2026-08-01")),
+            ("claude-sonnet-5-5-20260601", _d("2026-06-01")),
+        ]
+        providers = select_pinned_claude_provider(models, "sonnet", "5.5")
+        assert len(providers) == 1
+        assert providers[0]["model"] == "claude-sonnet-5-5-20260801"
 
     def test_same_version_snapshots_collapse(self):
         # Two snapshots of the same version are one generation; the previous

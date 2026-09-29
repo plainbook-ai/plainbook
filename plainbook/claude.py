@@ -162,15 +162,35 @@ def select_claude_providers(models):
     return providers
 
 
-def exclude_fable(providers):
-    """Drops the Fable family (both the current and previous-version entries)
-    from a Claude provider list of the shape select_claude_providers returns.
+def select_pinned_claude_provider(models, family, version):
+    """Like select_claude_providers, but returns at most one entry: the
+    Claude model whose parsed (family, version) exactly matches, or [] if no
+    such model is in `models`.
 
-    Used in --user-study mode, where Fable is not offered to participants.
-    Takes the already-built provider list rather than the raw model list, so
-    it composes with select_claude_providers instead of duplicating its family
-    parsing."""
-    return [p for p in providers if not p['id'].startswith('claude:fable')]
+    Used in --user-study mode, which is pinned to one specific, tested model
+    rather than select_claude_providers' "newest per family" -- that would
+    silently move the study onto a new release the moment Anthropic ships
+    one. Matched against the raw model list, not select_claude_providers'
+    already-reduced latest-plus-previous output, so the pin keeps resolving
+    even once two newer versions of the family have shipped and the pinned
+    one would otherwise have aged out of that top-2 window.
+
+    If two snapshots of the pinned version exist (a dated one and an undated
+    alias), the newest by created_at wins, matching select_claude_providers'
+    own tie-breaking for same-version snapshots."""
+    candidates = [(created_at, model_id) for model_id, created_at in models
+                  if _parse_claude_id(model_id) == (family, version)]
+    if not candidates:
+        return []
+    candidates.sort(key=lambda t: t[0], reverse=True)
+    _, model_id = candidates[0]
+    return [{
+        "id": f"claude:{family}",
+        "name": f"Claude {family.capitalize()} {version}",
+        "major": "claude",
+        "key_setting": "claude_api_key",
+        "model": model_id,
+    }]
 
 
 def claude_generate_code(

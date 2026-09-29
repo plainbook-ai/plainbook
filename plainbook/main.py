@@ -31,7 +31,7 @@ from bottle import run, default_app, request, response, redirect, TEMPLATE_PATH
 # Plainbook imports
 from .plainbook import (ExecutionError, ClarificationNeeded, check_notebook_file,
                         normalize_notebook_name, unique_notebook_path)
-from .claude import CLAUDE_MODEL, list_claude_models, select_claude_providers, exclude_fable
+from .claude import CLAUDE_MODEL, list_claude_models, select_claude_providers, select_pinned_claude_provider
 from .gemini import list_gemini_models, select_gemini_providers
 from .openai import list_openai_models, select_openai_providers
 from . import local_models
@@ -183,6 +183,13 @@ _PROVIDER_SOURCES = {
 }
 
 
+# The study is pinned to exactly this one Claude model -- see
+# _fetch_pinned_claude_provider's docstring for why a version match, not
+# select_claude_providers' "newest per family", is what --user-study uses.
+PINNED_STUDY_CLAUDE_FAMILY = "sonnet"
+PINNED_STUDY_CLAUDE_VERSION = "5.5"
+
+
 def _fetch_providers(major):
     """Returns the provider entries for `major` from its model API, caching
     them in settings so they can be used when the API is unreachable.
@@ -205,6 +212,47 @@ def _fetch_providers(major):
                 print(f"Using cached {major} models: { {p['id']: p['model'] for p in providers} }")
         else:
             print(f"Warning: no cached {major} models; {major} is unavailable until the models can be fetched")
+        return providers
+
+
+def _fetch_pinned_claude_provider():
+    """Like _fetch_providers("claude"), but returns at most the single Claude
+    provider entry matching PINNED_STUDY_CLAUDE_FAMILY/VERSION.
+
+    Caches under its own settings key ("claude_study_provider"), separate
+    from _PROVIDER_SOURCES' "claude_providers": that key is shared with the
+    non-study fetch path, and writing this filtered, single-entry result into
+    it would corrupt the cache a later non-study run of the same
+    ~/.config/plainbook/settings.yaml falls back to when the API is
+    unreachable.
+
+    Bedrock is not handled specially here (unlike _build_provider_registry's
+    CLAUDE_VIA_BEDROCK branch): list_claude_models already routes through
+    AnthropicBedrock when configured, so this works best-effort under Bedrock
+    too, but that combination is untested since the deployed study setup
+    does not use Bedrock."""
+    api_key = settings.get('claude_api_key')
+    if not api_key:
+        return []
+    cache_setting = 'claude_study_provider'
+    try:
+        providers = select_pinned_claude_provider(
+            list_claude_models(api_key), PINNED_STUDY_CLAUDE_FAMILY, PINNED_STUDY_CLAUDE_VERSION)
+        _save_settings(**{cache_setting: providers})
+        if not providers:
+            print(f"Warning: Claude {PINNED_STUDY_CLAUDE_FAMILY} {PINNED_STUDY_CLAUDE_VERSION} "
+                  "was not found in this key's model list; no AI provider will be available.")
+        elif args.debug:
+            print(f"Pinned study model: {providers[0]['model']}")
+        return providers
+    except Exception as e:
+        print(f"Warning: could not fetch claude models: {e}")
+        providers = settings.get(cache_setting) or []
+        if providers:
+            if args.debug:
+                print(f"Using cached pinned claude model: {providers[0]['model']}")
+        else:
+            print("Warning: no cached pinned claude model; claude is unavailable until it can be fetched")
         return providers
 
 
@@ -251,6 +299,16 @@ def _local_provider_entries():
 
 def _build_provider_registry():
     """Rebuilds AI_PROVIDER_REGISTRY in place from the model APIs."""
+    if args.user_study:
+        # The whole registry is exactly one entry: no other Claude version,
+        # no Gemini, no OpenAI, no local model. Every consumer of
+        # AI_PROVIDER_REGISTRY (the client dropdown, _ensure_active_ai_
+        # provider's auto-pick, /set_active_ai's validation against
+        # valid_ids) reads only what ends up here, so this single early
+        # return is the whole restriction -- nothing downstream needs to
+        # know study mode exists.
+        AI_PROVIDER_REGISTRY[:] = _fetch_pinned_claude_provider()
+        return
     providers = list(_local_provider_entries())     # first in the dropdown
     if CLAUDE_VIA_BEDROCK:
         # Bedrock doesn't support models.list; offer the env-configured model
@@ -264,17 +322,7 @@ def _build_provider_registry():
             "model": _bedrock_model,
         })
     else:
-        claude_providers = _fetch_providers("claude")
-        if args.user_study:
-            # Filtered here, not inside _fetch_providers, so the settings
-            # cache (and a run without --user-study) still reflects every
-            # model the key actually has access to. Every consumer of
-            # AI_PROVIDER_REGISTRY (the client dropdown, _ensure_active_ai_
-            # provider's auto-pick, /set_active_ai's validation against
-            # valid_ids) reads only what ends up here, so this is the single
-            # place that needs to know.
-            claude_providers = exclude_fable(claude_providers)
-        providers.extend(claude_providers)
+        providers.extend(_fetch_providers("claude"))
     providers.extend(_fetch_providers("gemini"))
     providers.extend(_fetch_providers("openai"))
     AI_PROVIDER_REGISTRY[:] = providers
@@ -283,7 +331,15 @@ def _build_provider_registry():
 def _refresh_local_providers():
     """Replaces just the local entries of the registry (a change of local
     model must not re-query the cloud model APIs), then re-validates the
-    active provider, starting or stopping the local model as needed."""
+    active provider, starting or stopping the local model as needed.
+
+    A no-op in --user-study mode: /local_model/setup is not itself guarded
+    (downloading is harmless on its own), but the registry there is pinned to
+    exactly one entry by _build_provider_registry, and a participant picking
+    a local model in Settings must not be able to add a second, selectable
+    option to it."""
+    if args.user_study:
+        return
     AI_PROVIDER_REGISTRY[:] = (_local_provider_entries()
                                + [p for p in AI_PROVIDER_REGISTRY if p['major'] != 'local'])
     _apply_active_provider(_ensure_active_ai_provider())
