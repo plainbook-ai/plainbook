@@ -186,8 +186,8 @@ _PROVIDER_SOURCES = {
 # The study is pinned to exactly this one Claude model -- see
 # _fetch_pinned_claude_provider's docstring for why a version match, not
 # select_claude_providers' "newest per family", is what --user-study uses.
-PINNED_STUDY_CLAUDE_FAMILY = "sonnet"
-PINNED_STUDY_CLAUDE_VERSION = "5.5"
+PINNED_STUDY_CLAUDE_FAMILY = "opus"
+PINNED_STUDY_CLAUDE_VERSION = "5"
 
 
 def _fetch_providers(major):
