@@ -882,6 +882,29 @@ class TestExecutionSkip:
                        if o.get("output_type") == "stream").strip()
         assert text == "KEEP 1"
 
+    def test_skip_keeps_mutation_of_unnamed_alias(self, notebook):
+        """A cell can modify a variable it never names, through a variable it
+        reads, and then break the sharing. The rebuild must still take that
+        variable from the cell's previous successor: here cell 1 reads only x,
+        appends to the list u shares with x[0], then drops it from x."""
+        _add_generated_cell(notebook, "L = []\nx = [L]\nu = L\nw = 1")
+        _add_generated_cell(notebook, "x[0].append(1)\nx.pop()")
+        _add_generated_cell(notebook, "z = w + 1")
+        notebook.last_valid_code_cell = 2
+        for i in range(3):
+            notebook.execute_cell(i)
+        assert self._probe(notebook, 1, "print(u, x)") == "[1] []"
+
+        counts = self._spy_rebuilds(notebook)
+        _set_generated_code(notebook, 0, "L = []\nx = [L]\nu = L\nw = 100")
+        notebook.last_valid_code_cell = 2
+        for i in range(3):
+            notebook.execute_cell(i)
+
+        assert counts["rebuild"] >= 1
+        assert self._probe(notebook, 1, "print(u, x, w)") == "[1] [] 100"
+        assert self._probe(notebook, 2, "print(z)") == "101"
+
     def test_force_disables_skip(self, notebook):
         """execute_cell(force=True) always really runs the cell.
 

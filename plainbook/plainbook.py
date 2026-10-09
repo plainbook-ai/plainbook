@@ -697,9 +697,13 @@ class Plainbook:
         except Exception:
             return None
         cur_var_group = {}
+        read_group_vars = set()
+        accessed_set = set(accessed)
         for group, fp in zip(cur.get("groups", []), cur.get("fingerprints", [])):
             for name in group:
                 cur_var_group[name] = fp
+            if accessed_set.intersection(group):
+                read_group_vars.update(group)
         # Every alias group containing a read variable must be unchanged.
         for name in accessed:
             if name not in cur_var_group or cur_var_group[name] not in baseline:
@@ -710,14 +714,20 @@ class Plainbook:
                    | set(lm.modified_symbols or [])
                    | set(lm.deleted_symbols or []))
         deleted = set(lm.deleted_symbols or [])
-        # Output region: source variables whose source-group holds a touched var.
+        # Output region: the source groups holding a touched variable or a
+        # variable of a read group of the current input. The read groups are
+        # needed because the cell can modify a variable it never names, through
+        # a variable it reads, and then break the sharing: with x = [L], u = L,
+        # the cell `x[0].append(1); x.pop()` reads only x yet changes u, and
+        # afterwards u shares nothing with x in the source state.
+        affected = touched | read_group_vars
         try:
             src = self._sk_request("POST", "/alias_groups", {"state_name": source_state})
         except Exception:
             return None
         source_vars = set()
         for group in src.get("groups", []):
-            if any(n in touched for n in group):
+            if any(n in affected for n in group):
                 source_vars.update(group)
         # Pass-through: current-input variables not taken from source, not deleted.
         input_vars = [n for n in cur_var_group
